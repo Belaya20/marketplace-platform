@@ -1,0 +1,1 @@
+ALTER ROLE ecom_api WITH PASSWORD 'QuantumRidgeForgeK74N0';
