@@ -6,49 +6,62 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // ── Connection pool sizing ────────────────────────────────────────────────────
-// Rule: max = (num_cpu_cores × 2) + effective_spindle_count
-// For a 2-core VPS running 2 PM2 instances: 10 connections per instance = 20 total
-// PostgreSQL default max_connections = 100, so 20 is safe.
-// In production set DB_POOL_MAX=15 per instance if you have 4+ PM2 workers.
 const POOL_MIN = parseInt(process.env.DB_POOL_MIN || '2');
-const POOL_MAX = parseInt(process.env.DB_POOL_MAX || '10'); // raise to 15 in prod
+const POOL_MAX = parseInt(process.env.DB_POOL_MAX || '10');
+
+// ── Connection Strategy ───────────────────────────────────────────────────────
+const connectionConfig = process.env.DATABASE_URL
+  ? {
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+    }
+  : {
+      host:     process.env.DB_HOST     || 'localhost',
+      port:     parseInt(process.env.DB_PORT || '5432'),
+      database: process.env.DB_NAME     || 'marketplace_db',
+      user:     process.env.DB_USER     || 'ecom_api',
+      password: process.env.DB_PASSWORD || 'QuantumRidgeForgeK74N0',
+      ssl:      process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+    };
 
 const config: Knex.Config = {
   client: 'pg',
   connection: {
-    host:     process.env.DB_HOST     || 'localhost',
-    port:     parseInt(process.env.DB_PORT || '5432'),
-    database: process.env.DB_NAME     || 'marketplace_db',
-    user:     process.env.DB_USER     || 'ecom_api',
-    password: process.env.DB_PASSWORD || 'QuantumRidgeForgeK74N0',
-    ssl:      process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
-    // FIX: statement_timeout at connection level — prevents runaway queries
-    // locking DB under heavy load. 15s is generous; most queries run < 100ms.
-    options:  `-c statement_timeout=15000`,
+    ...connectionConfig,
+    options: `-c statement_timeout=15000`,
   },
   pool: {
-    min:  POOL_MIN,
-    max:  POOL_MAX,
-    // Time to wait for a connection before throwing (ms)
+    min: POOL_MIN,
+    max: POOL_MAX,
     acquireTimeoutMillis: 15_000,
-    // How long an idle connection stays in the pool before being destroyed (ms)
-    idleTimeoutMillis:    300_000,  // 5 min — reduced from 10 min to free resources faster
-    // FIX: reapIntervalMillis — how often to check for timed-out idle connections
+    idleTimeoutMillis:    300_000, 
     reapIntervalMillis:   1_000,
-    // FIX: createRetryIntervalMillis — retry delay on failed connection attempts
     createRetryIntervalMillis: 200,
   },
-  // FIX: acquireConnectionTimeout is a top-level Knex option, not inside pool.
-  // The original config had it in the wrong place — it was silently ignored.
   acquireConnectionTimeout: 15_000,
-  // Debug: set to true only in dev to log all queries
   debug: process.env.NODE_ENV === 'development' && process.env.DB_DEBUG === 'true',
-  // FIX: postProcessResponse — coerces numeric Postgres strings to JS numbers.
-  // PostgreSQL returns NUMERIC/DECIMAL columns as strings. This stops the
-  // frontend from getting "43" instead of 43 for prices, totals, etc.
+
+  // FIX: Explicitly typed coerceNumbers to solve TS7023 error
   postProcessResponse: (result: any) => {
-    if (Array.isArray(result)) return result;
-    return result;
+    if (!result) return result;
+    
+    const coerceNumbers = (obj: any): any => {
+      if (Array.isArray(obj)) return obj.map(coerceNumbers);
+      if (typeof obj === 'object' && obj !== null) {
+        for (const key in obj) {
+          // If value is a numeric string (like prices from Postgres)
+          if (typeof obj[key] === 'string' && /^\d+(\.\d+)?$/.test(obj[key])) {
+             const num = parseFloat(obj[key]);
+             if (!isNaN(num)) obj[key] = num;
+          } else if (typeof obj[key] === 'object') {
+             obj[key] = coerceNumbers(obj[key]);
+          }
+        }
+      }
+      return obj;
+    };
+
+    return coerceNumbers(result);
   },
 };
 
