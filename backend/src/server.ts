@@ -1,7 +1,6 @@
-// src/server.ts
-// Server entry point — starts HTTP server and initialises background jobs
+// backend/src/server.ts
 import dotenv from 'dotenv';
-dotenv.config();   // Must be first — loads .env before anything else
+dotenv.config();
 
 import http from 'http';
 import app from './app';
@@ -9,26 +8,32 @@ import { verifyConnection, db } from './config/database';
 import logger from './config/logger';
 import { startBackgroundJobs } from './jobs/index';
 
-// ─── Healthcheck route ────────────────────────────────────────────────────────
-// Railway expects /health to return 200 OK if the app is alive.
-// We mount it directly on the app before creating the server.
-app.get('/health', async (req, res) => {
-  try {
-    await verifyConnection(); // quick DB check
-    res.status(200).send('OK');
-  } catch (err) {
-    logger.error('Healthcheck failed:', err);
-    res.status(500).send('DB not reachable');
-  }
-});
-
 const PORT = parseInt(process.env.PORT || '5000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 
-// ─── Create HTTP server ───────────────────────────────────────────────────────
+// ─── Health check ─────────────────────────────────────────────────────────────
+// FIX: /health must respond with 200 even when DB is briefly unreachable.
+// If the DB check throws, return 503 with a body — Railway retries for 90s.
+// Previously verifyConnection() crash cascaded into a 502 (no response at all).
+app.get('/health', async (_req, res) => {
+  try {
+    await verifyConnection();
+    res.status(200).json({
+      status:      'ok',
+      environment: process.env.NODE_ENV || 'development',
+      uptime:      Math.floor(process.uptime()),
+      timestamp:   new Date().toISOString(),
+    });
+  } catch (err) {
+    logger.error('Healthcheck DB check failed:', err);
+    // 503 tells Railway "app is alive but not ready yet, keep retrying"
+    // vs a timeout/502 which tells it "app is completely dead"
+    res.status(503).json({ status: 'error', message: 'DB not reachable' });
+  }
+});
+
 const server = http.createServer(app);
 
-// ─── Graceful shutdown ────────────────────────────────────────────────────────
 async function gracefulShutdown(signal: string) {
   logger.info(`Received ${signal}. Shutting down gracefully...`);
   server.close(async () => {
@@ -41,18 +46,14 @@ async function gracefulShutdown(signal: string) {
     }
     process.exit(0);
   });
-
-  // Force-kill if graceful shutdown takes too long
   setTimeout(() => {
     logger.error('Forced shutdown after timeout');
     process.exit(1);
-  }, 10000);
+  }, 10_000);
 }
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
-
-// ─── Unhandled errors ─────────────────────────────────────────────────────────
 process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled Promise Rejection:', reason);
 });
@@ -61,24 +62,18 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-// ─── Start ────────────────────────────────────────────────────────────────────
 async function start() {
   try {
-    // Test database connection
     await verifyConnection();
     logger.info('Database connection verified');
 
-    // Start HTTP server
     server.listen(PORT, HOST, () => {
       logger.info(`Server running on http://${HOST}:${PORT}`);
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-      logger.info(`API Base:    http://localhost:${PORT}/api/v1`);
       logger.info(`Health:      http://localhost:${PORT}/health`);
     });
 
-    // Start background jobs (low-stock alerts, report exports, etc.)
     startBackgroundJobs();
-
   } catch (err) {
     logger.error('Failed to start server:', err);
     process.exit(1);
