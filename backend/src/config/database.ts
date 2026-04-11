@@ -1,4 +1,3 @@
-// backend/src/config/database.ts
 import knex, { Knex } from 'knex';
 import dotenv from 'dotenv';
 
@@ -9,9 +8,9 @@ if (process.env.NODE_ENV !== 'production') {
 const POOL_MIN = parseInt(process.env.DB_POOL_MIN || '2');
 const POOL_MAX = parseInt(process.env.DB_POOL_MAX || '10');
 
-// Detect if we're connecting to Neon (or any PgBouncer-proxied DB).
-// Neon connection strings contain "neon.tech" or "pooler".
-// PgBouncer rejects startup parameters — never send `options` to it.
+/**
+ * Detects if the connection is routed through a proxy or pooler.
+ */
 const isPooledConnection = (): boolean => {
   const url = process.env.DATABASE_URL || '';
   return url.includes('neon.tech') || url.includes('pooler') || url.includes('pgbouncer');
@@ -21,16 +20,16 @@ const getConnection = () => {
   if (process.env.DATABASE_URL) {
     return {
       connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false }, // required for Neon TLS
+      ssl: { rejectUnauthorized: false },
     };
   }
   return {
-    host:     process.env.DB_HOST     || 'localhost',
-    port:     parseInt(process.env.DB_PORT || '5432'),
-    database: process.env.DB_NAME     || 'marketplace_db',
-    user:     process.env.DB_USER     || 'ecom_api',
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT || '5432'),
+    database: process.env.DB_NAME || 'marketplace_db',
+    user: process.env.DB_USER || 'ecom_api',
     password: process.env.DB_PASSWORD || '',
-    ssl:      false,
+    ssl: false,
   };
 };
 
@@ -38,28 +37,25 @@ const config: Knex.Config = {
   client: 'pg',
   connection: {
     ...getConnection(),
-    // FIX: NEVER set `options: -c statement_timeout=...` when using Neon/PgBouncer.
-    // PgBouncer rejects startup parameters — this was the crash cause.
-    // For local PostgreSQL (no pooler), we set it via afterCreate instead.
+    // Note: startup parameters like 'statement_timeout' are omitted here 
+    // to ensure compatibility with Neon/PgBouncer.
   },
   pool: {
     min: POOL_MIN,
     max: POOL_MAX,
-    acquireTimeoutMillis: 30_000,
-    idleTimeoutMillis:    30_000,
-    reapIntervalMillis:   1_000,
+    acquireTimeoutMillis: 30000,
+    idleTimeoutMillis: 30000,
+    reapIntervalMillis: 1000,
     createRetryIntervalMillis: 500,
-
-    // FIX: For local/direct connections only, set statement_timeout per connection.
-    // This is skipped for Neon/PgBouncer because SET is a session command that
-    // PgBouncer handles fine (unlike startup parameters).
+    
+    // Sets session-level timeouts only for direct (non-pooled) connections.
     afterCreate: isPooledConnection()
       ? undefined
       : (conn: any, done: Function) => {
           conn.query('SET statement_timeout = 15000', (err: any) => done(err, conn));
         },
   },
-  acquireConnectionTimeout: 60_000,
+  acquireConnectionTimeout: 60000,
   debug: process.env.NODE_ENV === 'development' && process.env.DB_DEBUG === 'true',
 
   postProcessResponse: (result: any) => {
