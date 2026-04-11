@@ -1,4 +1,7 @@
 // backend/src/config/database.ts
+// Req 4.1: Optimized database queries — connection pooling
+// Req 4.2: Security — RLS context set per request
+
 import knex, { Knex } from 'knex';
 import dotenv from 'dotenv';
 
@@ -10,11 +13,16 @@ if (process.env.NODE_ENV !== 'production') {
 const POOL_MIN = parseInt(process.env.DB_POOL_MIN || '2');
 const POOL_MAX = parseInt(process.env.DB_POOL_MAX || '10');
 
+/**
+ * Connection Strategy:
+ * - In production (Railway/Neon), use DATABASE_URL with SSL.
+ * - In local dev, fall back to discrete host/port/user/password.
+ */
 const getConnection = () => {
   if (process.env.DATABASE_URL) {
     return {
       connectionString: process.env.DATABASE_URL,
-      // rejectUnauthorized: false is mandatory for Neon/Railway proxy SSL
+      // Mandatory for Neon/Railway proxy SSL
       ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
     };
   }
@@ -33,7 +41,7 @@ const config: Knex.Config = {
   client: 'pg',
   connection: {
     ...getConnection(),
-    // Prevents one heavy query from hanging your whole app
+    // Prevents runaway queries from hanging the app
     options: `-c statement_timeout=15000`, 
   },
   pool: {
@@ -44,11 +52,16 @@ const config: Knex.Config = {
     reapIntervalMillis: 1000,
     createRetryIntervalMillis: 500,
   },
-  // This is the top-level timeout for Knex to give up entirely
+  // Top-level timeout for Knex to give up entirely
   acquireConnectionTimeout: 60000, 
   
   debug: process.env.NODE_ENV === 'development' && process.env.DB_DEBUG === 'true',
 
+  /**
+   * Data Integrity:
+   * Coerce Postgres NUMERIC/DECIMAL strings into JS numbers
+   * (but leave integer IDs untouched).
+   */
   postProcessResponse: (result: any) => {
     if (!result) return result;
 
@@ -57,8 +70,6 @@ const config: Knex.Config = {
       if (typeof obj === 'object' && obj !== null) {
         for (const key in obj) {
           const val = obj[key];
-          // Only convert strings that look like decimals (Prices/Quantities)
-          // We ignore strings that are purely integers to avoid messing up IDs
           if (typeof val === 'string' && /^-?\d+\.\d+$/.test(val)) {
             const num = parseFloat(val);
             if (!isNaN(num)) obj[key] = num;
@@ -75,9 +86,23 @@ const config: Knex.Config = {
 
 export const db = knex(config);
 
-// Export verification for server.ts startup check
-export const verifyConnection = async () => {
+/**
+ * Verifies database availability on startup.
+ * Used by server.ts and /health endpoint.
+ */
+export const verifyConnection = async (): Promise<void> => {
   await db.raw('SELECT 1');
 };
+
+/**
+ * Row Level Security (RLS) Helper:
+ * Sets the current user ID in the Postgres local session context.
+ */
+export async function setUserContext(
+  trxOrDb: Knex | Knex.Transaction,
+  userId: string
+): Promise<void> {
+  await trxOrDb.raw(`SET LOCAL app.current_user_id = ?`, [userId]);
+}
 
 export default db;
