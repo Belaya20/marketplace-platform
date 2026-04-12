@@ -26,22 +26,17 @@ app.use(compression({
 }));
 
 // ─── 2. SECURITY HEADERS ─────────────────────────────────────────────────────
-// Req 4.2: XSS, clickjacking, MIME sniffing protection.
-// contentSecurityPolicy is disabled here because the frontend handles its own
-// CSP. HSTS enforces HTTPS after first visit (production only).
+// contentSecurityPolicy disabled — handled by frontend.
+// HSTS enforces HTTPS after first visit (2 years).
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }, // allow images from CDNs
-  contentSecurityPolicy:     false,                      // handled by frontend
-  strictTransportSecurity: {
-    maxAge:            63_072_000, // 2 years
-    includeSubDomains: true,
-  },
-  crossOriginEmbedderPolicy: false, // allow external image embeds
+  contentSecurityPolicy:     false,
+  strictTransportSecurity:   { maxAge: 63_072_000, includeSubDomains: true },
+  crossOriginEmbedderPolicy: false,                      // allow external image embeds
 }));
 
 // ─── 3. CORS ─────────────────────────────────────────────────────────────────
-// Req 4.2: Only our own origins allowed.
-// MERGED: added ADMIN_URL (port 3001) from the fixed version.
+// Only our own origins allowed. Admin app (port 3001) included.
 const allowedOrigins = (
   process.env.ALLOWED_ORIGINS ||
   `${process.env.FRONTEND_URL || 'http://localhost:3000'},${process.env.ADMIN_URL || 'http://localhost:3001'}`
@@ -49,7 +44,7 @@ const allowedOrigins = (
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, Postman, server-to-server)
+    // Allow no-origin requests (mobile apps, Postman, server-to-server)
     if (!origin || allowedOrigins.includes(origin)) callback(null, true);
     else callback(new Error(`CORS: ${origin} not allowed`));
   },
@@ -57,12 +52,11 @@ app.use(cors({
   methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-chapa-signature'],
   exposedHeaders: ['X-Total-Count'],
-  maxAge:         86_400, // cache preflight 24 hours
+  maxAge:         86_400, // cache preflight for 24 hours
 }));
 
 // ─── 4. RATE LIMITING ────────────────────────────────────────────────────────
-// Req 4.2: Brute-force and API abuse protection.
-// MERGED: added tighter auth + OTP limiters from the fixed version.
+// Brute-force and API abuse protection.
 
 // General API: 200 req / minute / IP
 const generalLimiter = rateLimit({
@@ -100,9 +94,8 @@ app.use('/api/v1/auth/verify-otp',        otpLimiter);
 app.use('/api/v1/auth/resend-otp',        otpLimiter);
 
 // ─── 5. BODY PARSERS ─────────────────────────────────────────────────────────
-// IMPORTANT: Chapa webhook MUST receive the raw body for HMAC signature
-// verification — it cannot go through JSON.parse() first.
-// So we skip JSON parsing for that one path, then register the global parsers.
+// Chapa webhook MUST receive the raw body for HMAC signature verification.
+// Skip JSON parsing for that path — it is handled by the webhook route itself.
 app.use((req, res, next) => {
   if (req.path === '/api/v1/payments/webhook/chapa') return next();
   express.json({ limit: '2mb' })(req, res, next);
@@ -110,8 +103,7 @@ app.use((req, res, next) => {
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // ─── 6. REQUEST TIMEOUT ──────────────────────────────────────────────────────
-// MERGED from fixed version: kill requests that stall > 30s to prevent
-// resource exhaustion under load.
+// Kill requests that stall > 30s to prevent resource exhaustion.
 app.use((_req: Request, res: Response, next: NextFunction) => {
   res.setTimeout(30_000, () => {
     if (!res.headersSent) {
@@ -124,7 +116,7 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// ─── 7. REQUEST LOGGING ───────────────────────────────────────────────────────
+// ─── 7. REQUEST LOGGING ──────────────────────────────────────────────────────
 if (process.env.NODE_ENV !== 'test') {
   app.use(morgan('combined', {
     stream: { write: (msg) => logger.info(msg.trim()) },
@@ -133,51 +125,72 @@ if (process.env.NODE_ENV !== 'test') {
 app.use(requestLogger);
 
 // ─── 8. HEALTH CHECK ─────────────────────────────────────────────────────────
-// No auth, no rate limit — used by load balancers, PM2, UptimeRobot.
-app.get('/health', (_req, res) => {
-  res.status(200).json({
-    status:      'ok',
-    environment: process.env.NODE_ENV || 'development',
-    uptime:      Math.floor(process.uptime()),
-    timestamp:   new Date().toISOString(),
-  });
+// FIX: This is the ONLY /health definition in the entire codebase.
+// The old version returned 200 unconditionally — that meant Railway marked
+// the deploy as healthy even when the database was completely unreachable.
+//
+// This version does a real SELECT 1 check:
+//   → 200: server + DB are both healthy
+//   → 503: server is alive but DB is not reachable yet
+//
+// Railway retries the healthcheck for 120s on 503 — this gives Neon's
+// connection pooler time to wake up (cold start ~1-5s) without failing
+// the entire deploy. The server never exits while waiting.
+//
+// verifyConnection is imported lazily (dynamic import) to avoid a
+// circular dependency: app.ts → database.ts → [nothing] is fine,
+// but static top-level import of database.ts in app.ts can interfere
+// with the dotenv.config() call in server.ts that must run first.
+app.get('/health', async (_req: Request, res: Response) => {
+  try {
+    const { verifyConnection } = await import('./config/database');
+    await verifyConnection();
+    res.status(200).json({
+      status:      'ok',
+      environment: process.env.NODE_ENV || 'development',
+      uptime:      Math.floor(process.uptime()),
+      timestamp:   new Date().toISOString(),
+    });
+  } catch (err) {
+    // 503 = "alive but not ready" — Railway keeps retrying
+    logger.error('[health] DB check failed:', err);
+    res.status(503).json({
+      status:    'error',
+      message:   'Database not reachable',
+      timestamp: new Date().toISOString(),
+    });
+  }
 });
 
 app.get('/', (_req, res) => {
   res.json({ message: 'Marketplace Platform API', version: '1.0.0' });
 });
 
-// ─── 9. API ROUTES ────────────────────────────────────────────────────────────
+// ─── 9. API ROUTES ───────────────────────────────────────────────────────────
 app.use('/api/v1', apiRouter);
 
-// ─── 10. ERROR HANDLING ───────────────────────────────────────────────────────
-// MERGED: error handler now never exposes stack traces in production.
-// The original errorHandler from middleware is kept for structured errors
-// (ValidationError, AuthError etc.). The global catch-all below handles
-// anything that slips through.
+// ─── 10. ERROR HANDLING ──────────────────────────────────────────────────────
+// notFoundHandler catches unmatched routes (404).
+// The inline handler below catches everything else and never exposes
+// stack traces in production.
+// errorHandler from middleware handles structured errors (ValidationError etc.)
 app.use(notFoundHandler);
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   const status  = err.statusCode || err.status || 500;
   const message = err.message    || 'Internal server error';
 
-  // Always log 5xx errors internally with full stack
   if (status >= 500) {
     logger.error(`[${status}] ${message}`, { stack: err.stack });
   }
 
   res.status(status).json({
     success: false,
-    // Never expose internal error details in production for 500s
     message: process.env.NODE_ENV === 'production' && status === 500
       ? 'Something went wrong on our end. Please try again.'
       : message,
-    // Include stack in development only
     ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
   });
 });
-
-// Delegate to the existing structured errorHandler for known error types
-// (this runs AFTER the global catch-all only if re-thrown — see middleware/index.ts)
 app.use(errorHandler);
 
 export default app;
