@@ -1,4 +1,4 @@
-// src/app.ts
+// backend/src/app.ts
 // Main Express application setup
 // Req 4.1: Performance — compression, connection keep-alive
 // Req 4.2: Security — Helmet, CORS, rate limiting, body parsing, timeout
@@ -16,6 +16,14 @@ import apiRouter from './routes/index';
 import logger    from './config/logger';
 
 const app: Application = express();
+
+// ─── TRUST PROXY ─────────────────────────────────────────────────────────────
+// FIX 1: Railway runs behind a reverse proxy (nginx).
+// Without this, express-rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
+// because X-Forwarded-For is set but Express doesn't trust it by default.
+// '1' = trust exactly one proxy hop (Railway's edge layer).
+// Also makes req.ip return the real client IP for rate limiting accuracy.
+app.set('trust proxy', 1);
 
 // ─── 1. COMPRESSION ──────────────────────────────────────────────────────────
 // Must be FIRST — compresses all responses before they leave Express.
@@ -36,7 +44,11 @@ app.use(helmet({
 }));
 
 // ─── 3. CORS ─────────────────────────────────────────────────────────────────
-// Only our own origins allowed. Admin app (port 3001) included.
+// FIX 2: Also allow all *.vercel.app subdomains automatically.
+// Vercel creates a unique URL per deployment commit, e.g.:
+//   addismarket2-9yjan2azh-belayas-projects.vercel.app
+// These change with every deploy and cannot be enumerated in ALLOWED_ORIGINS.
+// Allowing *.vercel.app covers production + all preview deploys permanently.
 const allowedOrigins = (
   process.env.ALLOWED_ORIGINS ||
   `${process.env.FRONTEND_URL || 'http://localhost:3000'},${process.env.ADMIN_URL || 'http://localhost:3001'}`
@@ -44,9 +56,21 @@ const allowedOrigins = (
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow no-origin requests (mobile apps, Postman, server-to-server)
-    if (!origin || allowedOrigins.includes(origin)) callback(null, true);
-    else callback(new Error(`CORS: ${origin} not allowed`));
+    // No origin = Postman, mobile apps, server-to-server — always allow
+    if (!origin) return callback(null, true);
+
+    // Exact match against configured origins (production URLs)
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+
+    // All Vercel preview and production URLs — *.vercel.app
+    if (origin.endsWith('.vercel.app')) return callback(null, true);
+
+    // Local development
+    if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
+      return callback(null, true);
+    }
+
+    callback(new Error(`CORS: ${origin} not allowed`));
   },
   credentials:    true,
   methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -57,6 +81,7 @@ app.use(cors({
 
 // ─── 4. RATE LIMITING ────────────────────────────────────────────────────────
 // Brute-force and API abuse protection.
+// Works correctly now that trust proxy is set above.
 
 // General API: 200 req / minute / IP
 const generalLimiter = rateLimit({
@@ -125,22 +150,10 @@ if (process.env.NODE_ENV !== 'test') {
 app.use(requestLogger);
 
 // ─── 8. HEALTH CHECK ─────────────────────────────────────────────────────────
-// FIX: This is the ONLY /health definition in the entire codebase.
-// The old version returned 200 unconditionally — that meant Railway marked
-// the deploy as healthy even when the database was completely unreachable.
-//
-// This version does a real SELECT 1 check:
-//   → 200: server + DB are both healthy
-//   → 503: server is alive but DB is not reachable yet
-//
-// Railway retries the healthcheck for 120s on 503 — this gives Neon's
-// connection pooler time to wake up (cold start ~1-5s) without failing
-// the entire deploy. The server never exits while waiting.
-//
-// verifyConnection is imported lazily (dynamic import) to avoid a
-// circular dependency: app.ts → database.ts → [nothing] is fine,
-// but static top-level import of database.ts in app.ts can interfere
-// with the dotenv.config() call in server.ts that must run first.
+// Single definition — NOT duplicated in server.ts.
+// Returns 200 when DB reachable, 503 when not.
+// Railway retries for 120s on 503 — covers Neon cold starts (~1-5s).
+// Dynamic import avoids circular dependency with database.ts.
 app.get('/health', async (_req: Request, res: Response) => {
   try {
     const { verifyConnection } = await import('./config/database');
@@ -152,8 +165,8 @@ app.get('/health', async (_req: Request, res: Response) => {
       timestamp:   new Date().toISOString(),
     });
   } catch (err) {
-    // 503 = "alive but not ready" — Railway keeps retrying
     logger.error('[health] DB check failed:', err);
+    // 503 = "alive but not ready" — Railway keeps retrying healthcheck
     res.status(503).json({
       status:    'error',
       message:   'Database not reachable',
@@ -171,8 +184,7 @@ app.use('/api/v1', apiRouter);
 
 // ─── 10. ERROR HANDLING ──────────────────────────────────────────────────────
 // notFoundHandler catches unmatched routes (404).
-// The inline handler below catches everything else and never exposes
-// stack traces in production.
+// Inline handler below catches everything else — never exposes stack in prod.
 // errorHandler from middleware handles structured errors (ValidationError etc.)
 app.use(notFoundHandler);
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
