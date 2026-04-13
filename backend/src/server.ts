@@ -1,6 +1,6 @@
 // backend/src/server.ts
 import dotenv from 'dotenv';
-dotenv.config(); // Must be first — loads .env before any other imports
+dotenv.config();
 
 import http   from 'http';
 import path   from 'path';
@@ -10,7 +10,7 @@ import logger from './config/logger';
 import { startBackgroundJobs } from './jobs/index';
 
 const PORT = parseInt(process.env.PORT || '5000', 10);
-const HOST = '0.0.0.0'; // Railway requires binding to all interfaces
+const HOST = '0.0.0.0';
 
 const server = http.createServer(app);
 
@@ -27,7 +27,6 @@ async function gracefulShutdown(signal: string) {
     }
     process.exit(0);
   });
-  // Force-kill after 10s if connections won't close
   setTimeout(() => {
     logger.error('[server] Forced shutdown — graceful shutdown timed out');
     process.exit(1);
@@ -38,24 +37,13 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 process.on('unhandledRejection', (reason) => {
   logger.error('[server] Unhandled Promise Rejection:', reason);
-  // Do NOT exit — log and continue. Exiting on every unhandled rejection
-  // causes unnecessary Railway restarts for non-fatal async errors.
 });
 process.on('uncaughtException', (err) => {
   logger.error('[server] Uncaught Exception:', err);
-  process.exit(1); // Fatal — process is in unknown state
+  process.exit(1);
 });
 
 // ── Migrations ────────────────────────────────────────────────────────────────
-// Controlled by MIGRATE_ON_START=true Railway env var.
-// Workflow: set var → push → wait for "[migrate] Done ✓" → remove var → push.
-//
-// Migration directory confirmed from Railway deploy logs:
-//   /app contents: dist, knexfile.ts, src, node_modules, ...
-//   /app/dist contents: ..., migrations, ...  ← compiled migrations ARE here
-//
-// __dirname at runtime = /app/dist  (this file compiles to /app/dist/server.js)
-// so path.join(__dirname, 'migrations') = /app/dist/migrations  ✓
 async function runMigrationsIfNeeded(): Promise<void> {
   if (process.env.MIGRATE_ON_START !== 'true') return;
   logger.info('[migrate] MIGRATE_ON_START=true — starting...');
@@ -63,26 +51,23 @@ async function runMigrationsIfNeeded(): Promise<void> {
   const fs   = require('fs');
   const Knex = require('knex');
 
-  // Build direct (unpooled) Neon URL for DDL operations.
-  // PgBouncer (pooled endpoint, hostname contains "-pooler") rejects
-  // PostgreSQL startup parameters — DDL migrations must use the direct connection.
+  // Build direct (unpooled) Neon URL — PgBouncer (-pooler) rejects DDL
   const rawUrl    = process.env.DATABASE_URL || '';
   const directUrl = rawUrl
-    .replace(/-pooler(\.)/, '$1')                   // ep-xxx-pooler.region → ep-xxx.region
-    .replace(/[?&]sslmode=[^&]*/g,        '')       // strip sslmode= param (we set ssl explicitly)
-    .replace(/[?&]channel_binding=[^&]*/g, '')      // strip channel_binding= param
-    .replace(/[?&]$/, '');                          // clean trailing ? or &
+    .replace(/-pooler(\.)/, '$1')
+    .replace(/[?&]sslmode=[^&]*/g, '')
+    .replace(/[?&]channel_binding=[^&]*/g, '')
+    .replace(/[?&]$/, '');
 
   logger.info(`[migrate] Direct host: ${directUrl.split('@')[1]?.split('/')[0] || 'unknown'}`);
 
-  // ── Find compiled migrations directory ────────────────────────────────────
-  // Primary: /app/dist/migrations  (confirmed from deploy log)
-  // Fallbacks: other possible paths tried in order
+  // ── Find migrations directory ─────────────────────────────────────────────
+  // __dirname at runtime = /app/dist (server.ts compiles to /app/dist/server.js)
   const candidates = [
-    path.join(__dirname, 'migrations'),                           // /app/dist/migrations ← PRIMARY
-    path.join(__dirname, '..', 'dist', 'migrations'),            // /app/dist/migrations (alt)
-    path.join(__dirname, '..', 'database', 'migrations'),        // /app/database/migrations
-    path.join(__dirname, '..', '..', 'database', 'migrations'),  // /database/migrations
+    path.join(__dirname, 'migrations'),                          // /app/dist/migrations ← PRIMARY
+    path.join(__dirname, '..', 'dist', 'migrations'),           // /app/dist/migrations (alt)
+    path.join(__dirname, '..', 'database', 'migrations'),       // /app/database/migrations
+    path.join(__dirname, '..', '..', 'database', 'migrations'), // /database/migrations
   ];
 
   let migrationsDir = '';
@@ -96,44 +81,60 @@ async function runMigrationsIfNeeded(): Promise<void> {
   }
 
   if (!migrationsDir) {
-    // This block should never run now — but if it does, log everything for debug
     try {
       logger.error(`[migrate] /app contents:      ${fs.readdirSync('/app').join(', ')}`);
       logger.error(`[migrate] /app/dist contents: ${fs.readdirSync('/app/dist').join(', ')}`);
     } catch (e: any) {
       logger.error('[migrate] Cannot list dirs:', e.message);
     }
-    logger.error('[migrate] No migrations directory found — aborting');
+    logger.error('[migrate] No migrations directory found — skipping');
     return;
   }
 
-  const files = fs.readdirSync(migrationsDir).filter((f: string) => /\.(js|ts)$/.test(f));
-  logger.info(`[migrate] ${files.length} migration files found`);
+  // FIX: Only count real executable .js files.
+  // The old regex /\.(js|ts)$/ matched .d.ts declaration files,
+  // causing "Cannot use import statement outside a module" crash.
+  // .d.ts files are TypeScript type definitions — not runnable code.
+  const files = fs.readdirSync(migrationsDir).filter(
+    (f: string) => f.endsWith('.js') && !f.endsWith('.d.ts')
+  );
+  logger.info(`[migrate] ${files.length} runnable migration file(s) found`);
+
+  if (files.length === 0) {
+    logger.info('[migrate] No .js migration files found — skipping');
+    return;
+  }
 
   // ── Connect via direct (unpooled) URL ─────────────────────────────────────
   const migrationDb = Knex({
     client: 'pg',
     connection: {
       connectionString: directUrl,
-      ssl: { rejectUnauthorized: false }, // required for Neon TLS
+      ssl: { rejectUnauthorized: false },
     },
-    pool: { min: 1, max: 1 }, // single connection is enough for migrations
+    pool: { min: 1, max: 1 },
   });
 
-  // Test the direct connection before attempting migrations
   try {
     await migrationDb.raw('SELECT 1');
     logger.info('[migrate] Direct connection OK');
   } catch (connErr: any) {
     logger.error(`[migrate] Direct connection FAILED: ${connErr.message}`);
-    logger.error(`[migrate] Code: ${connErr.code} | Detail: ${connErr.detail}`);
     await migrationDb.destroy();
     return;
   }
 
-  // ── Run pending migrations ─────────────────────────────────────────────────
+  // ── Run pending migrations ────────────────────────────────────────────────
   try {
-    const [batchNo, log] = await migrationDb.migrate.latest({ directory: migrationsDir });
+    const [batchNo, log] = await migrationDb.migrate.latest({
+      directory: migrationsDir,
+      // FIX: loadExtensions tells Knex to only load .js files.
+      // Without this, Knex's internal glob picks up .d.ts files
+      // even when they are not in our filtered list above,
+      // because migrate.latest re-scans the directory itself.
+      loadExtensions: ['.js'],
+    });
+
     if (log.length === 0) {
       logger.info('[migrate] Already up to date — no new migrations needed');
     } else {
@@ -151,8 +152,6 @@ async function runMigrationsIfNeeded(): Promise<void> {
 }
 
 // ── Admin seed ────────────────────────────────────────────────────────────────
-// Only runs when MIGRATE_ON_START=true. Creates the default admin account
-// if none exists. Safe to run multiple times (idempotent).
 async function createAdminIfNeeded(): Promise<void> {
   if (process.env.MIGRATE_ON_START !== 'true') return;
   try {
@@ -184,10 +183,7 @@ async function createAdminIfNeeded(): Promise<void> {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 async function start() {
-  // STEP 1: Bind HTTP port immediately.
-  // Railway's healthcheck fires as soon as the container starts.
-  // If we wait for DB connection before listening, Railway times out.
-  // /health returns 503 while DB connects, 200 once ready.
+  // STEP 1: Bind HTTP port immediately so Railway healthcheck gets a response
   server.listen(PORT, HOST, () => {
     logger.info(`[server] HTTP server listening on ${HOST}:${PORT}`);
     logger.info(`[server] Environment: ${process.env.NODE_ENV || 'development'}`);
@@ -195,8 +191,7 @@ async function start() {
     logger.info(`[server] API:    http://localhost:${PORT}/api/v1`);
   });
 
-  // STEP 2: Connect to DB with exponential backoff retry.
-  // Neon cold start can take 1-5s — retry covers this window.
+  // STEP 2: Connect to DB with exponential backoff (covers Neon cold starts)
   let dbReady = false;
   for (let i = 1; i <= 5; i++) {
     try {
@@ -213,23 +208,20 @@ async function start() {
 
   if (!dbReady) {
     logger.error('[server] Database unreachable after all retries — running in degraded mode');
-    logger.error('[server] API calls requiring DB will fail until connection is restored');
-    // Don't exit — /health returns 503, Railway will restart the service
     return;
   }
 
-  // STEP 3: Run pending migrations (only when MIGRATE_ON_START=true)
+  // STEP 3: Run migrations if MIGRATE_ON_START=true
   await runMigrationsIfNeeded();
 
-  // STEP 4: Seed default admin user (only when MIGRATE_ON_START=true)
+  // STEP 4: Seed admin if MIGRATE_ON_START=true
   await createAdminIfNeeded();
 
-  // STEP 5: Start background jobs (cron tasks, cleanup, etc.)
+  // STEP 5: Start background jobs
   try {
     startBackgroundJobs();
     logger.info('[server] Background jobs started');
   } catch (err) {
-    // Non-fatal — log and continue
     logger.error('[server] Failed to start background jobs:', err);
   }
 }
