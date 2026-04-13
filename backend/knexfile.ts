@@ -7,7 +7,12 @@ if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
 }
 
-const isProduction = process.env.NODE_ENV === 'production';
+/**
+ * SUPER CLASS ARCHITECTURE:
+ * We use path.join(process.cwd(), ...) to ensure paths are absolute.
+ * This prevents "Directory not found" errors when moving between 
+ * development (TS) and production (JS in dist).
+ */
 
 const config: Record<string, Knex.Config> = {
   development: {
@@ -21,11 +26,27 @@ const config: Record<string, Knex.Config> = {
     },
     pool: { min: 2, max: 10 },
     migrations: { 
-      directory: './src/database/migrations', 
+      directory: path.join(process.cwd(), 'src', 'database', 'migrations'), 
       extension: 'ts' 
     },
     seeds: { 
-      directory: './src/database/seeds', 
+      directory: path.join(process.cwd(), 'src', 'database', 'seeds'), 
+      extension: 'ts' 
+    },
+  },
+
+  test: {
+    client: 'postgresql',
+    connection: {
+      host:     process.env.DB_HOST      || 'localhost',
+      port:     Number(process.env.DB_PORT) || 5432,
+      database: process.env.DB_TEST_NAME || 'marketplace_test',
+      user:     process.env.DB_USER      || 'ecom_api',
+      password: process.env.DB_PASSWORD  || '',
+    },
+    pool: { min: 2, max: 10 },
+    migrations: { 
+      directory: path.join(process.cwd(), 'src', 'database', 'migrations'), 
       extension: 'ts' 
     },
   },
@@ -34,23 +55,23 @@ const config: Record<string, Knex.Config> = {
     client: 'postgresql',
     connection: {
       connectionString: process.env.DATABASE_URL,
-      // Critical for Neon/Railway cloud connectivity
+      // Essential for Neon/Railway cloud databases
       ssl: { rejectUnauthorized: false },
     },
     pool: {
-      min: 0, // Critical for Neon free tier to release idle connections
+      min: 0, // Critical: Releases connections in serverless/cloud environments
       max: 10,
-      acquireTimeoutMillis: 30000,
-      idleTimeoutMillis: 10000,
+      acquireTimeoutMillis: 30_000,
+      idleTimeoutMillis:    10_000,
     },
     migrations: { 
-      // Points to compiled JS files in dist
-      directory: path.join(__dirname, 'dist/database/migrations'),
-      // SUPER CLASS FIX: Ignore .d.ts files that cause SyntaxErrors
+      // Pointing to the compiled JS files in the dist folder
+      directory: path.join(process.cwd(), 'dist', 'database', 'migrations'),
+      // THE SHIELD: Tells Knex to only run JS and ignore the crashing .d.ts files
       loadExtensions: ['.js'] 
     },
     seeds: { 
-      directory: path.join(__dirname, 'dist/database/seeds'),
+      directory: path.join(process.cwd(), 'dist', 'database', 'seeds'),
       loadExtensions: ['.js']
     },
   },

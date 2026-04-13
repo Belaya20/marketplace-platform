@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-dotenv.config();
+dotenv.config(); // Must be first — loads .env before any other imports
 
 import http   from 'http';
 import path   from 'path';
@@ -10,7 +10,7 @@ import logger from './config/logger';
 import { startBackgroundJobs } from './jobs/index';
 
 const PORT = parseInt(process.env.PORT || '5000', 10);
-const HOST = '0.0.0.0';
+const HOST = '0.0.0.0'; 
 
 const server = http.createServer(app);
 
@@ -40,7 +40,7 @@ process.on('unhandledRejection', (reason) => {
 });
 process.on('uncaughtException', (err) => {
   logger.error('[server] Uncaught Exception:', err);
-  process.exit(1);
+  process.exit(1); 
 });
 
 // ── Migrations ────────────────────────────────────────────────────────────────
@@ -49,49 +49,26 @@ async function runMigrationsIfNeeded(): Promise<void> {
   logger.info('[migrate] MIGRATE_ON_START=true — starting...');
 
   const Knex = require('knex');
-
-  // Build direct (unpooled) Neon URL — PgBouncer (-pooler) rejects DDL (CREATE TABLE)
-  const rawUrl    = process.env.DATABASE_URL || '';
-  const directUrl = rawUrl
-    .replace(/-pooler(\.)/, '$1')
-    .replace(/[?&]sslmode=[^&]*/g, '')
-    .replace(/[?&]channel_binding=[^&]*/g, '')
-    .replace(/[?&]$/, '');
-
-  logger.info(`[migrate] Direct host: ${directUrl.split('@')[1]?.split('/')[0] || 'unknown'}`);
-
-  // ── Find migrations directory (Super Class Path Resolution) ────────────────
-  // In production, everything is in /app/dist/
   const isProduction = process.env.NODE_ENV === 'production';
+
+  // Build direct (unpooled) Neon URL
+  const rawUrl    = process.env.DATABASE_URL || '';
+  const directUrl = rawUrl.replace(/-pooler(\.)/, '$1');
+
+  // ── SUPER CLASS PATH RESOLUTION ────────────────────────────────────────────
+  // We use process.cwd() to anchor to the project root.
   const migrationsDir = isProduction 
-    ? path.join(__dirname, 'database', 'migrations') // /app/dist/database/migrations
+    ? path.join(process.cwd(), 'dist', 'database', 'migrations')
     : path.join(process.cwd(), 'src', 'database', 'migrations');
 
-  if (!fs.existsSync(migrationsDir)) {
-    logger.error(`[migrate] Migrations directory not found at: ${migrationsDir}`);
-    // Fallback search for structural safety
-    const fallback = path.join(__dirname, 'migrations');
-    if (fs.existsSync(fallback)) {
-      logger.info(`[migrate] Using fallback migrations path: ${fallback}`);
-    } else {
-      logger.error('[migrate] Critical: No migrations found. Skipping.');
-      return;
-    }
-  } else {
-    logger.info(`[migrate] ✓ Found migrations at: ${migrationsDir}`);
-  }
+  logger.info(`[migrate] Looking for migrations in: ${migrationsDir}`);
 
-  // ── Filter for runnable files ─────────────────────────────────────────────
-  const files = fs.readdirSync(migrationsDir).filter(
-    (f: string) => f.endsWith('.js') && !f.endsWith('.d.ts')
-  );
-  
-  if (isProduction && files.length === 0) {
-    logger.warn('[migrate] No .js migration files found in dist. Check build output.');
+  if (!fs.existsSync(migrationsDir)) {
+    logger.error('[migrate] Critical: Migrations directory not found. Skipping.');
     return;
   }
 
-  // ── Connect via direct (unpooled) URL ─────────────────────────────────────
+  // ── Connect & Execute ──────────────────────────────────────────────────────
   const migrationDb = Knex({
     client: 'pg',
     connection: {
@@ -105,17 +82,17 @@ async function runMigrationsIfNeeded(): Promise<void> {
     await migrationDb.raw('SELECT 1');
     logger.info('[migrate] Direct connection OK');
 
-    // ── Run pending migrations ────────────────────────────────────────────────
-    const [batchNo, log] = await migrationDb.migrate.latest({
+    const [batchNo, log] = await migrationDb.migrate.latest({ 
       directory: migrationsDir,
-      // MANDATORY: This stops Knex from trying to load .d.ts files
-      loadExtensions: [isProduction ? '.js' : '.ts'],
+      // THE SHIELD: Only run .js files in production, ignore .d.ts files
+      loadExtensions: [isProduction ? '.js' : '.ts'] 
     });
 
     if (log.length === 0) {
       logger.info('[migrate] Already up to date');
     } else {
-      logger.info(`[migrate] Batch ${batchNo} — ${log.length} migration(s) ran successfully`);
+      logger.info(`[migrate] Batch ${batchNo} — ${log.length} migration(s) ran:`);
+      log.forEach((m: string) => logger.info(`  ✓ ${m}`));
     }
     logger.info('[migrate] Done ✓');
   } catch (err: any) {
@@ -132,7 +109,7 @@ async function createAdminIfNeeded(): Promise<void> {
   try {
     const existing = await db('users').where({ role: 'admin' }).first();
     if (existing) {
-      logger.info('[seed] Admin user already exists — skipping');
+      logger.info('[seed] Admin user already exists');
       return;
     }
     const bcrypt = require('bcryptjs');
@@ -158,12 +135,11 @@ async function createAdminIfNeeded(): Promise<void> {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 async function start() {
-  // 1. Listen immediately (Railway requirement)
+  // Bind port first for Railway healthcheck
   server.listen(PORT, HOST, () => {
     logger.info(`[server] HTTP server listening on ${HOST}:${PORT}`);
   });
 
-  // 2. Database Connection with Retry logic
   let dbReady = false;
   for (let i = 1; i <= 5; i++) {
     try {
@@ -183,13 +159,12 @@ async function start() {
     return;
   }
 
-  // 3. System Tasks
   await runMigrationsIfNeeded();
   await createAdminIfNeeded();
 
   try {
     startBackgroundJobs();
-    logger.info('[server] Background jobs started');
+    logger.info('[server] Background jobs operational');
   } catch (err) {
     logger.error('[server] Failed to start background jobs:', err);
   }
