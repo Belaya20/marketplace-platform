@@ -7,17 +7,24 @@ if (process.env.NODE_ENV !== 'production') {
   dotenv.config();
 }
 
-// Helper to find the best migration path in production
+/**
+ * SUPER CLASS DYNAMIC PATH RESOLUTION:
+ * This helper checks multiple locations in the dist folder to ensure
+ * migrations are found regardless of how TSC structures the build.
+ */
 const getProdMigrationDir = () => {
   const possiblePaths = [
     path.join(process.cwd(), 'dist', 'database', 'migrations'),
-    path.join(process.cwd(), 'dist', 'migrations') // Fallback if tsc flattens the folder
+    path.join(process.cwd(), 'dist', 'migrations'),
+    path.join(__dirname, 'database', 'migrations'),
+    path.join(__dirname, 'migrations')
   ];
   
   for (const p of possiblePaths) {
     if (fs.existsSync(p)) return p;
   }
-  return possiblePaths[0]; // Default back
+  // Default to the most likely standard path
+  return path.join(process.cwd(), 'dist', 'database', 'migrations');
 };
 
 const config: Record<string, Knex.Config> = {
