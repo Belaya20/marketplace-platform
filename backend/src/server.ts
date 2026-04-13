@@ -1,9 +1,9 @@
-// backend/src/server.ts
 import dotenv from 'dotenv';
 dotenv.config();
 
 import http   from 'http';
 import path   from 'path';
+import fs     from 'fs';
 import app    from './app';
 import { verifyConnection, db } from './config/database';
 import logger from './config/logger';
@@ -48,10 +48,9 @@ async function runMigrationsIfNeeded(): Promise<void> {
   if (process.env.MIGRATE_ON_START !== 'true') return;
   logger.info('[migrate] MIGRATE_ON_START=true — starting...');
 
-  const fs   = require('fs');
   const Knex = require('knex');
 
-  // Build direct (unpooled) Neon URL — PgBouncer (-pooler) rejects DDL
+  // Build direct (unpooled) Neon URL — PgBouncer (-pooler) rejects DDL (CREATE TABLE)
   const rawUrl    = process.env.DATABASE_URL || '';
   const directUrl = rawUrl
     .replace(/-pooler(\.)/, '$1')
@@ -61,47 +60,34 @@ async function runMigrationsIfNeeded(): Promise<void> {
 
   logger.info(`[migrate] Direct host: ${directUrl.split('@')[1]?.split('/')[0] || 'unknown'}`);
 
-  // ── Find migrations directory ─────────────────────────────────────────────
-  // __dirname at runtime = /app/dist (server.ts compiles to /app/dist/server.js)
-  const candidates = [
-    path.join(__dirname, 'migrations'),                          // /app/dist/migrations ← PRIMARY
-    path.join(__dirname, '..', 'dist', 'migrations'),           // /app/dist/migrations (alt)
-    path.join(__dirname, '..', 'database', 'migrations'),       // /app/database/migrations
-    path.join(__dirname, '..', '..', 'database', 'migrations'), // /database/migrations
-  ];
+  // ── Find migrations directory (Super Class Path Resolution) ────────────────
+  // In production, everything is in /app/dist/
+  const isProduction = process.env.NODE_ENV === 'production';
+  const migrationsDir = isProduction 
+    ? path.join(__dirname, 'database', 'migrations') // /app/dist/database/migrations
+    : path.join(process.cwd(), 'src', 'database', 'migrations');
 
-  let migrationsDir = '';
-  for (const c of candidates) {
-    if (fs.existsSync(c)) {
-      migrationsDir = c;
-      logger.info(`[migrate] ✓ Found migrations at: ${c}`);
-      break;
+  if (!fs.existsSync(migrationsDir)) {
+    logger.error(`[migrate] Migrations directory not found at: ${migrationsDir}`);
+    // Fallback search for structural safety
+    const fallback = path.join(__dirname, 'migrations');
+    if (fs.existsSync(fallback)) {
+      logger.info(`[migrate] Using fallback migrations path: ${fallback}`);
+    } else {
+      logger.error('[migrate] Critical: No migrations found. Skipping.');
+      return;
     }
-    logger.info(`[migrate]   Not found: ${c}`);
+  } else {
+    logger.info(`[migrate] ✓ Found migrations at: ${migrationsDir}`);
   }
 
-  if (!migrationsDir) {
-    try {
-      logger.error(`[migrate] /app contents:      ${fs.readdirSync('/app').join(', ')}`);
-      logger.error(`[migrate] /app/dist contents: ${fs.readdirSync('/app/dist').join(', ')}`);
-    } catch (e: any) {
-      logger.error('[migrate] Cannot list dirs:', e.message);
-    }
-    logger.error('[migrate] No migrations directory found — skipping');
-    return;
-  }
-
-  // FIX: Only count real executable .js files.
-  // The old regex /\.(js|ts)$/ matched .d.ts declaration files,
-  // causing "Cannot use import statement outside a module" crash.
-  // .d.ts files are TypeScript type definitions — not runnable code.
+  // ── Filter for runnable files ─────────────────────────────────────────────
   const files = fs.readdirSync(migrationsDir).filter(
     (f: string) => f.endsWith('.js') && !f.endsWith('.d.ts')
   );
-  logger.info(`[migrate] ${files.length} runnable migration file(s) found`);
-
-  if (files.length === 0) {
-    logger.info('[migrate] No .js migration files found — skipping');
+  
+  if (isProduction && files.length === 0) {
+    logger.warn('[migrate] No .js migration files found in dist. Check build output.');
     return;
   }
 
@@ -118,34 +104,23 @@ async function runMigrationsIfNeeded(): Promise<void> {
   try {
     await migrationDb.raw('SELECT 1');
     logger.info('[migrate] Direct connection OK');
-  } catch (connErr: any) {
-    logger.error(`[migrate] Direct connection FAILED: ${connErr.message}`);
-    await migrationDb.destroy();
-    return;
-  }
 
-  // ── Run pending migrations ────────────────────────────────────────────────
-  try {
+    // ── Run pending migrations ────────────────────────────────────────────────
     const [batchNo, log] = await migrationDb.migrate.latest({
       directory: migrationsDir,
-      // FIX: loadExtensions tells Knex to only load .js files.
-      // Without this, Knex's internal glob picks up .d.ts files
-      // even when they are not in our filtered list above,
-      // because migrate.latest re-scans the directory itself.
-      loadExtensions: ['.js'],
+      // MANDATORY: This stops Knex from trying to load .d.ts files
+      loadExtensions: [isProduction ? '.js' : '.ts'],
     });
 
     if (log.length === 0) {
-      logger.info('[migrate] Already up to date — no new migrations needed');
+      logger.info('[migrate] Already up to date');
     } else {
-      logger.info(`[migrate] Batch ${batchNo} — ${log.length} migration(s) ran:`);
-      log.forEach((m: string) => logger.info(`[migrate]   ✓ ${m}`));
+      logger.info(`[migrate] Batch ${batchNo} — ${log.length} migration(s) ran successfully`);
     }
     logger.info('[migrate] Done ✓');
   } catch (err: any) {
     logger.error(`[migrate] FAILED: ${err.message}`);
-    logger.error(`[migrate] Code: ${err.code} | Detail: ${err.detail} | Hint: ${err.hint}`);
-    logger.error(`[migrate] Stack:\n${err.stack}`);
+    logger.error(`[migrate] Stack: ${err.stack}`);
   } finally {
     await migrationDb.destroy();
   }
@@ -160,20 +135,20 @@ async function createAdminIfNeeded(): Promise<void> {
       logger.info('[seed] Admin user already exists — skipping');
       return;
     }
-    const bcrypt          = require('bcryptjs');
+    const bcrypt = require('bcryptjs');
     const { v4: uuidv4 } = require('uuid');
     const hash = await bcrypt.hash('Admin123!', 12);
     await db('users').insert({
-      id:            uuidv4(),
-      email:         'admin@marketplace.et',
+      id: uuidv4(),
+      email: 'admin@marketplace.et',
       password_hash: hash,
-      first_name:    'Admin',
-      last_name:     'User',
-      role:          'admin',
-      is_active:     true,
-      is_verified:   true,
-      created_at:    new Date(),
-      updated_at:    new Date(),
+      first_name: 'Admin',
+      last_name: 'User',
+      role: 'admin',
+      is_active: true,
+      is_verified: true,
+      created_at: new Date(),
+      updated_at: new Date(),
     });
     logger.info('[seed] ✓ Admin created → admin@marketplace.et / Admin123!');
   } catch (err: any) {
@@ -183,15 +158,12 @@ async function createAdminIfNeeded(): Promise<void> {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 async function start() {
-  // STEP 1: Bind HTTP port immediately so Railway healthcheck gets a response
+  // 1. Listen immediately (Railway requirement)
   server.listen(PORT, HOST, () => {
     logger.info(`[server] HTTP server listening on ${HOST}:${PORT}`);
-    logger.info(`[server] Environment: ${process.env.NODE_ENV || 'development'}`);
-    logger.info(`[server] Health: http://localhost:${PORT}/health`);
-    logger.info(`[server] API:    http://localhost:${PORT}/api/v1`);
   });
 
-  // STEP 2: Connect to DB with exponential backoff (covers Neon cold starts)
+  // 2. Database Connection with Retry logic
   let dbReady = false;
   for (let i = 1; i <= 5; i++) {
     try {
@@ -200,24 +172,21 @@ async function start() {
       logger.info(`[server] Database connected (attempt ${i}/5)`);
       break;
     } catch {
-      const delay = 1_000 * Math.pow(2, i - 1); // 1s, 2s, 4s, 8s, 16s
+      const delay = 1_000 * Math.pow(2, i - 1);
       logger.warn(`[server] DB attempt ${i}/5 failed — retry in ${delay}ms`);
       if (i < 5) await new Promise(r => setTimeout(r, delay));
     }
   }
 
   if (!dbReady) {
-    logger.error('[server] Database unreachable after all retries — running in degraded mode');
+    logger.error('[server] Database unreachable — running in degraded mode');
     return;
   }
 
-  // STEP 3: Run migrations if MIGRATE_ON_START=true
+  // 3. System Tasks
   await runMigrationsIfNeeded();
-
-  // STEP 4: Seed admin if MIGRATE_ON_START=true
   await createAdminIfNeeded();
 
-  // STEP 5: Start background jobs
   try {
     startBackgroundJobs();
     logger.info('[server] Background jobs started');
