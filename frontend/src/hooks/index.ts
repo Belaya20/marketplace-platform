@@ -1,6 +1,5 @@
 'use client';
-// src/hooks/index.ts
-// CHANGE: useAuth.login() now blocks admin role — admins must use localhost:3001
+
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
@@ -11,14 +10,17 @@ import {
 } from '@/lib/api';
 import { useAuthStore, useCartStore, useNotificationStore } from '@/store';
 
-// ── FORMAT ETB ───────────────────────────────────────────────────────────────
+// ── Utility: Ethiopian Birr formatter ────────────────────────────────────────
 export function formatETB(amount: number): string {
   return new Intl.NumberFormat('en-ET', {
-    style: 'currency', currency: 'ETB',
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
+    style:                'currency',
+    currency:             'ETB',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(amount);
 }
 
+// ── Utility: order status badge colors ───────────────────────────────────────
 export const ORDER_STATUS_COLORS: Record<string, string> = {
   pending:    'bg-yellow-100 text-yellow-800',
   confirmed:  'bg-blue-100 text-blue-800',
@@ -29,42 +31,60 @@ export const ORDER_STATUS_COLORS: Record<string, string> = {
   returned:   'bg-gray-100 text-gray-600',
 };
 
-// ── AUTH ─────────────────────────────────────────────────────────────────────
+// ── useAuth ───────────────────────────────────────────────────────────────────
+
 export function useAuth() {
   const { user, setAuth, clearAuth, isLoading, setLoading } = useAuthStore();
   const router = useRouter();
 
-  const login = useCallback(async (email: string, password: string, rememberMe = false) => {
+  const login = useCallback(async (
+    email:     string,
+    password:  string,
+    rememberMe = false,
+  ) => {
     setLoading(true);
     try {
       const res  = await authApi.login(email, password, rememberMe);
       const role = res.data.user.role;
 
-      // ── BLOCK ADMIN — must use the separate admin panel ──────────────────
-      // Admin accounts cannot log in through the customer/seller frontend.
-      // This prevents admins from accidentally accessing the wrong interface
-      // and closes the security boundary between the two apps.
+      // Admin accounts belong in the separate admin panel (port 3001 / admin.addismarket.et).
+      // Logging in as admin through the customer/seller frontend would give access
+      // to the wrong interface and breaks the security boundary between the two apps.
       if (role === 'admin') {
-        toast.error('Admin accounts must log in at the admin panel.');
-        return; // Do NOT setAuth — leave session clean
+        toast.error('Admin accounts must sign in at the admin panel.');
+        return;
       }
 
       setAuth(res.data.user, res.data.access_token, res.data.refresh_token);
       toast.success('Welcome back!');
 
-      if (role === 'seller') router.push('/seller/dashboard');
-      else                   router.push('/');
+      // Read the ?redirect= param set by middleware when the user tried to
+      // access a protected page while unauthenticated (e.g. /checkout).
+      // Fall back to role-appropriate defaults.
+      const redirectTo = (() => {
+        if (typeof window === 'undefined') return null;
+        return new URLSearchParams(window.location.search).get('redirect');
+      })();
+
+      if (redirectTo) {
+        router.push(redirectTo);
+      } else if (role === 'seller') {
+        router.push('/seller/dashboard');
+      } else {
+        router.push('/');
+      }
 
     } catch (err: any) {
       if (!err.response) {
-        toast.error('Cannot connect to server. Make sure the backend is running on port 5000.');
+        toast.error('Cannot connect to the server. Please try again.');
         return;
       }
+
       const status  = err.response?.status;
       const message = err.response?.data?.message || '';
 
       if (status === 403 && message.toLowerCase().includes('verify your email')) {
-        toast.error('Please verify your email first. Redirecting to verification page...');
+        toast.error('Please verify your email first. Redirecting…');
         router.push(`/verify-otp?purpose=email_verify&email=${encodeURIComponent(email)}`);
         return;
       }
@@ -76,31 +96,42 @@ export function useAuth() {
         toast.error('Invalid email or password.');
         return;
       }
+
       toast.error(message || 'Login failed. Please try again.');
+
     } finally {
       setLoading(false);
     }
-  }, [setAuth, clearAuth, setLoading, router]);
+    // clearAuth intentionally excluded from deps — it is never called inside login()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setAuth, setLoading, router]);
 
   const logout = useCallback(async () => {
-    try { await authApi.logout(); } catch { /* ignore */ }
+    try { await authApi.logout(); } catch { /* Server-side logout is best-effort */ }
     clearAuth();
     router.push('/login');
     toast.success('Logged out');
   }, [clearAuth, router]);
 
-  return { user, isLoading, login, logout, isAuthenticated: !!user };
+  return {
+    user,
+    isLoading,
+    login,
+    logout,
+    isAuthenticated: !!user,
+  };
 }
 
-// ── CART ─────────────────────────────────────────────────────────────────────
+// ── useCart ───────────────────────────────────────────────────────────────────
+
 export function useCart() {
   const { cart, isOpen, setCart, openCart, closeCart, toggleCart } = useCartStore();
   const { user } = useAuthStore();
   const qc = useQueryClient();
 
   const { isLoading } = useQuery({
-    queryKey: ['cart'],
-    queryFn:  async () => {
+    queryKey:  ['cart'],
+    queryFn:   async () => {
       const data = await cartApi.getCart();
       setCart(data as any);
       return data;
@@ -128,12 +159,21 @@ export function useCart() {
 
   const removeItem = useMutation({
     mutationFn: (itemId: string) => cartApi.removeItem(itemId),
-    onSuccess:  () => { qc.invalidateQueries({ queryKey: ['cart'] }); toast.success('Removed'); },
+    onSuccess:  () => {
+      qc.invalidateQueries({ queryKey: ['cart'] });
+      toast.success('Removed');
+    },
   });
 
   return {
-    cart, itemCount: cart?.item_count ?? 0, subtotal: cart?.subtotal ?? 0,
-    isLoading, isOpen, openCart, closeCart, toggleCart,
+    cart,
+    itemCount:  cart?.item_count ?? 0,
+    subtotal:   cart?.subtotal ?? 0,
+    isLoading,
+    isOpen,
+    openCart,
+    closeCart,
+    toggleCart,
     addItem:    addItem.mutate,
     updateQty:  updateQty.mutate,
     removeItem: removeItem.mutate,
@@ -141,21 +181,25 @@ export function useCart() {
   };
 }
 
-// ── WISHLIST ─────────────────────────────────────────────────────────────────
+// ── useWishlist ───────────────────────────────────────────────────────────────
+
 export function useWishlist() {
   const { user } = useAuthStore();
   const qc = useQueryClient();
 
   const { data: items = [] } = useQuery({
-    queryKey: ['wishlist'],
-    queryFn:  wishlistApi.getWishlist,
-    enabled:  !!user,
+    queryKey:  ['wishlist'],
+    queryFn:   wishlistApi.getWishlist,
+    enabled:   !!user,
     staleTime: 60_000,
   });
 
   const addItem = useMutation({
     mutationFn: (productId: string) => wishlistApi.addItem(productId),
-    onSuccess:  () => { qc.invalidateQueries({ queryKey: ['wishlist'] }); toast.success('Added to wishlist'); },
+    onSuccess:  () => {
+      qc.invalidateQueries({ queryKey: ['wishlist'] });
+      toast.success('Added to wishlist');
+    },
   });
   const removeItem = useMutation({
     mutationFn: (productId: string) => wishlistApi.removeItem(productId),
@@ -163,18 +207,28 @@ export function useWishlist() {
   });
   const moveToCart = useMutation({
     mutationFn: (productId: string) => wishlistApi.moveToCart(productId),
-    onSuccess:  () => { qc.invalidateQueries({ queryKey: ['wishlist', 'cart'] }); toast.success('Moved to cart'); },
+    onSuccess:  () => {
+      qc.invalidateQueries({ queryKey: ['wishlist', 'cart'] });
+      toast.success('Moved to cart');
+    },
   });
 
   const isInWishlist = useCallback(
     (productId: string) => (items as any[]).some((i: any) => i.product_id === productId),
-    [items]
+    [items],
   );
 
-  return { items, isInWishlist, addItem: addItem.mutate, removeItem: removeItem.mutate, moveToCart: moveToCart.mutate };
+  return {
+    items,
+    isInWishlist,
+    addItem:    addItem.mutate,
+    removeItem: removeItem.mutate,
+    moveToCart: moveToCart.mutate,
+  };
 }
 
-// ── SEARCH ────────────────────────────────────────────────────────────────────
+// ── useSearch ─────────────────────────────────────────────────────────────────
+
 export function useSearch(initial = '') {
   const [query,       setQuery]       = useState(initial);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -193,7 +247,8 @@ export function useSearch(initial = '') {
   return { query, setQuery, suggestions };
 }
 
-// ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
+// ── useNotifications ──────────────────────────────────────────────────────────
+
 export function useNotifications() {
   const { user }  = useAuthStore();
   const store     = useNotificationStore();
@@ -238,7 +293,8 @@ export function useNotifications() {
   return { ...store, markRead, markAllRead, deleteOne, deleteAll };
 }
 
-// ── PRODUCT QUERIES ───────────────────────────────────────────────────────────
+// ── useProductSearch ──────────────────────────────────────────────────────────
+
 export function useProductSearch(params: Record<string, any> = {}) {
   return useQuery({
     queryKey:        ['products', params],
@@ -257,7 +313,8 @@ export function useProduct(slug: string) {
   });
 }
 
-// ── ORDER QUERIES ─────────────────────────────────────────────────────────────
+// ── useOrders ─────────────────────────────────────────────────────────────────
+
 export function useOrders(page = 1) {
   return useQuery({
     queryKey:  ['orders', page],
