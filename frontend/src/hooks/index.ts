@@ -1,3 +1,4 @@
+ 
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
@@ -10,17 +11,13 @@ import {
 } from '@/lib/api';
 import { useAuthStore, useCartStore, useNotificationStore } from '@/store';
 
-// ── Utility: Ethiopian Birr formatter ────────────────────────────────────────
 export function formatETB(amount: number): string {
   return new Intl.NumberFormat('en-ET', {
-    style:                'currency',
-    currency:             'ETB',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    style: 'currency', currency: 'ETB',
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
   }).format(amount);
 }
 
-// ── Utility: order status badge colors ───────────────────────────────────────
 export const ORDER_STATUS_COLORS: Record<string, string> = {
   pending:    'bg-yellow-100 text-yellow-800',
   confirmed:  'bg-blue-100 text-blue-800',
@@ -31,15 +28,13 @@ export const ORDER_STATUS_COLORS: Record<string, string> = {
   returned:   'bg-gray-100 text-gray-600',
 };
 
-// ── useAuth ───────────────────────────────────────────────────────────────────
-
 export function useAuth() {
   const { user, setAuth, clearAuth, isLoading, setLoading } = useAuthStore();
   const router = useRouter();
 
   const login = useCallback(async (
-    email:     string,
-    password:  string,
+    email: string,
+    password: string,
     rememberMe = false,
   ) => {
     setLoading(true);
@@ -47,9 +42,7 @@ export function useAuth() {
       const res  = await authApi.login(email, password, rememberMe);
       const role = res.data.user.role;
 
-      // Admin accounts belong in the separate admin panel (port 3001 / admin.addismarket.et).
-      // Logging in as admin through the customer/seller frontend would give access
-      // to the wrong interface and breaks the security boundary between the two apps.
+      // Admin accounts belong in the admin panel only
       if (role === 'admin') {
         toast.error('Admin accounts must sign in at the admin panel.');
         return;
@@ -58,21 +51,14 @@ export function useAuth() {
       setAuth(res.data.user, res.data.access_token, res.data.refresh_token);
       toast.success('Welcome back!');
 
-      // Read the ?redirect= param set by middleware when the user tried to
-      // access a protected page while unauthenticated (e.g. /checkout).
-      // Fall back to role-appropriate defaults.
       const redirectTo = (() => {
         if (typeof window === 'undefined') return null;
         return new URLSearchParams(window.location.search).get('redirect');
       })();
 
-      if (redirectTo) {
-        router.push(redirectTo);
-      } else if (role === 'seller') {
-        router.push('/seller/dashboard');
-      } else {
-        router.push('/');
-      }
+      if (redirectTo)           router.push(redirectTo);
+      else if (role === 'seller') router.push('/seller/dashboard');
+      else                        router.push('/');
 
     } catch (err: any) {
       if (!err.response) {
@@ -82,16 +68,39 @@ export function useAuth() {
 
       const status  = err.response?.status;
       const message = err.response?.data?.message || '';
+      const msgLower = message.toLowerCase();
 
-      if (status === 403 && message.toLowerCase().includes('verify your email')) {
-        toast.error('Please verify your email first. Redirecting…');
-        router.push(`/verify-otp?purpose=email_verify&email=${encodeURIComponent(email)}`);
-        return;
-      }
       if (status === 403) {
+        // Case 1: email not verified → redirect to verify-otp
+        if (msgLower.includes('verify your email')) {
+          toast.error('Please verify your email first. Redirecting…');
+          router.push(`/verify-otp?purpose=email_verify&email=${encodeURIComponent(email)}`);
+          return;
+        }
+
+        // Case 2: seller pending admin approval → stay on login, show info toast
+        if (msgLower.includes('pending admin approval') || msgLower.includes('pending approval')) {
+          toast.error(
+            '⏳ Your seller account is pending admin approval. You will be notified by email once approved.',
+            { duration: 6000 }
+          );
+          return;
+        }
+
+        // Case 3: seller rejected
+        if (msgLower.includes('not approved') || msgLower.includes('rejected')) {
+          toast.error(
+            message || 'Your seller application was not approved. Please contact support.',
+            { duration: 6000 }
+          );
+          return;
+        }
+
+        // Case 4: suspended or any other 403
         toast.error(message || 'Your account has been suspended. Please contact support.');
         return;
       }
+
       if (status === 401) {
         toast.error('Invalid email or password.');
         return;
@@ -102,115 +111,84 @@ export function useAuth() {
     } finally {
       setLoading(false);
     }
-    // clearAuth intentionally excluded from deps — it is never called inside login()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setAuth, setLoading, router]);
 
   const logout = useCallback(async () => {
-    try { await authApi.logout(); } catch { /* Server-side logout is best-effort */ }
+    try { await authApi.logout(); } catch { /* best-effort */ }
     clearAuth();
     router.push('/login');
     toast.success('Logged out');
   }, [clearAuth, router]);
 
-  return {
-    user,
-    isLoading,
-    login,
-    logout,
-    isAuthenticated: !!user,
-  };
+  return { user, isLoading, login, logout, isAuthenticated: !!user };
 }
 
 // ── useCart ───────────────────────────────────────────────────────────────────
-
 export function useCart() {
   const { cart, isOpen, setCart, openCart, closeCart, toggleCart } = useCartStore();
   const { user } = useAuthStore();
   const qc = useQueryClient();
 
   const { isLoading } = useQuery({
-    queryKey:  ['cart'],
-    queryFn:   async () => {
+    queryKey: ['cart'],
+    queryFn: async () => {
       const data = await cartApi.getCart();
       setCart(data as any);
       return data;
     },
-    enabled:   !!user,
+    enabled: !!user,
     staleTime: 30_000,
   });
 
   const addItem = useMutation({
     mutationFn: ({ variantId, quantity = 1 }: { variantId: string; quantity?: number }) =>
       cartApi.addItem(variantId, quantity),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['cart'] });
-      openCart();
-      toast.success('Added to cart');
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['cart'] }); openCart(); toast.success('Added to cart'); },
     onError: (e: any) => toast.error(e.response?.data?.message || 'Failed to add item'),
   });
 
   const updateQty = useMutation({
-    mutationFn: ({ itemId, quantity }: { itemId: string; quantity: number }) =>
-      cartApi.updateQty(itemId, quantity),
+    mutationFn: ({ itemId, quantity }: { itemId: string; quantity: number }) => cartApi.updateQty(itemId, quantity),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['cart'] }),
   });
 
   const removeItem = useMutation({
     mutationFn: (itemId: string) => cartApi.removeItem(itemId),
-    onSuccess:  () => {
-      qc.invalidateQueries({ queryKey: ['cart'] });
-      toast.success('Removed');
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['cart'] }); toast.success('Removed'); },
   });
 
   return {
-    cart,
-    itemCount:  cart?.item_count ?? 0,
-    subtotal:   cart?.subtotal ?? 0,
-    isLoading,
-    isOpen,
-    openCart,
-    closeCart,
-    toggleCart,
-    addItem:    addItem.mutate,
-    updateQty:  updateQty.mutate,
-    removeItem: removeItem.mutate,
-    isAdding:   addItem.isPending,
+    cart, itemCount: cart?.item_count ?? 0, subtotal: cart?.subtotal ?? 0,
+    isLoading, isOpen, openCart, closeCart, toggleCart,
+    addItem: addItem.mutate, updateQty: updateQty.mutate, removeItem: removeItem.mutate,
+    isAdding: addItem.isPending,
   };
 }
 
 // ── useWishlist ───────────────────────────────────────────────────────────────
-
 export function useWishlist() {
   const { user } = useAuthStore();
   const qc = useQueryClient();
 
   const { data: items = [] } = useQuery({
-    queryKey:  ['wishlist'],
-    queryFn:   wishlistApi.getWishlist,
-    enabled:   !!user,
+    queryKey: ['wishlist'],
+    queryFn: wishlistApi.getWishlist,
+    enabled: !!user,
     staleTime: 60_000,
   });
 
   const addItem = useMutation({
     mutationFn: (productId: string) => wishlistApi.addItem(productId),
-    onSuccess:  () => {
-      qc.invalidateQueries({ queryKey: ['wishlist'] });
-      toast.success('Added to wishlist');
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['wishlist'] }); toast.success('Added to wishlist'); },
   });
   const removeItem = useMutation({
     mutationFn: (productId: string) => wishlistApi.removeItem(productId),
-    onSuccess:  () => qc.invalidateQueries({ queryKey: ['wishlist'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['wishlist'] }),
   });
   const moveToCart = useMutation({
     mutationFn: (productId: string) => wishlistApi.moveToCart(productId),
-    onSuccess:  () => {
-      qc.invalidateQueries({ queryKey: ['wishlist', 'cart'] });
-      toast.success('Moved to cart');
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['wishlist', 'cart'] }); toast.success('Moved to cart'); },
   });
 
   const isInWishlist = useCallback(
@@ -218,27 +196,16 @@ export function useWishlist() {
     [items],
   );
 
-  return {
-    items,
-    isInWishlist,
-    addItem:    addItem.mutate,
-    removeItem: removeItem.mutate,
-    moveToCart: moveToCart.mutate,
-  };
+  return { items, isInWishlist, addItem: addItem.mutate, removeItem: removeItem.mutate, moveToCart: moveToCart.mutate };
 }
 
 // ── useSearch ─────────────────────────────────────────────────────────────────
-
 export function useSearch(initial = '') {
-  const [query,       setQuery]       = useState(initial);
+  const [query, setQuery] = useState(initial);
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [debounced,   setDebounced]   = useState(query);
+  const [debounced, setDebounced] = useState(query);
 
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(query), 280);
-    return () => clearTimeout(t);
-  }, [query]);
-
+  useEffect(() => { const t = setTimeout(() => setDebounced(query), 280); return () => clearTimeout(t); }, [query]);
   useEffect(() => {
     if (debounced.trim().length < 2) { setSuggestions([]); return; }
     searchApi.suggest(debounced).then(setSuggestions).catch(() => {});
@@ -248,86 +215,37 @@ export function useSearch(initial = '') {
 }
 
 // ── useNotifications ──────────────────────────────────────────────────────────
-
 export function useNotifications() {
-  const { user }  = useAuthStore();
-  const store     = useNotificationStore();
-  const qc        = useQueryClient();
+  const { user } = useAuthStore();
+  const store    = useNotificationStore();
+  const qc       = useQueryClient();
 
   useQuery({
     queryKey: ['notifications'],
-    queryFn:  async () => {
-      const data = await notificationApi.getAll();
-      store.setNotifications(data);
-      return data;
-    },
-    enabled:         !!user,
-    refetchInterval: 30_000,
-    staleTime:       15_000,
+    queryFn: async () => { const data = await notificationApi.getAll(); store.setNotifications(data); return data; },
+    enabled: !!user, refetchInterval: 30_000, staleTime: 15_000,
   });
 
-  const markRead = useCallback(async (id: string) => {
-    store.markRead(id);
-    await notificationApi.markRead(id).catch(() => {});
-    qc.invalidateQueries({ queryKey: ['notifications'] });
-  }, [store, qc]);
-
-  const markAllRead = useCallback(async () => {
-    store.markAllRead();
-    await notificationApi.markAllRead().catch(() => {});
-    qc.invalidateQueries({ queryKey: ['notifications'] });
-  }, [store, qc]);
-
-  const deleteOne = useCallback(async (id: string) => {
-    store.setNotifications(store.notifications.filter((n: any) => n.id !== id));
-    await notificationApi.deleteOne(id).catch(() => {});
-    qc.invalidateQueries({ queryKey: ['notifications'] });
-  }, [store, qc]);
-
-  const deleteAll = useCallback(async () => {
-    store.setNotifications([]);
-    await notificationApi.deleteAll().catch(() => {});
-    qc.invalidateQueries({ queryKey: ['notifications'] });
-  }, [store, qc]);
+  const markRead    = useCallback(async (id: string) => { store.markRead(id); await notificationApi.markRead(id).catch(() => {}); qc.invalidateQueries({ queryKey: ['notifications'] }); }, [store, qc]);
+  const markAllRead = useCallback(async () => { store.markAllRead(); await notificationApi.markAllRead().catch(() => {}); qc.invalidateQueries({ queryKey: ['notifications'] }); }, [store, qc]);
+  const deleteOne   = useCallback(async (id: string) => { store.setNotifications(store.notifications.filter((n: any) => n.id !== id)); await notificationApi.deleteOne(id).catch(() => {}); qc.invalidateQueries({ queryKey: ['notifications'] }); }, [store, qc]);
+  const deleteAll   = useCallback(async () => { store.setNotifications([]); await notificationApi.deleteAll().catch(() => {}); qc.invalidateQueries({ queryKey: ['notifications'] }); }, [store, qc]);
 
   return { ...store, markRead, markAllRead, deleteOne, deleteAll };
 }
 
-// ── useProductSearch ──────────────────────────────────────────────────────────
-
 export function useProductSearch(params: Record<string, any> = {}) {
-  return useQuery({
-    queryKey:        ['products', params],
-    queryFn:         () => productApi.search(params),
-    staleTime:       60_000,
-    placeholderData: (prev: any) => prev,
-  });
+  return useQuery({ queryKey: ['products', params], queryFn: () => productApi.search(params), staleTime: 60_000, placeholderData: (prev: any) => prev });
 }
 
 export function useProduct(slug: string) {
-  return useQuery({
-    queryKey:  ['product', slug],
-    queryFn:   () => productApi.getBySlug(slug),
-    staleTime: 120_000,
-    enabled:   !!slug,
-  });
+  return useQuery({ queryKey: ['product', slug], queryFn: () => productApi.getBySlug(slug), staleTime: 120_000, enabled: !!slug });
 }
 
-// ── useOrders ─────────────────────────────────────────────────────────────────
-
 export function useOrders(page = 1) {
-  return useQuery({
-    queryKey:  ['orders', page],
-    queryFn:   () => orderApi.getOrders(page),
-    staleTime: 30_000,
-  });
+  return useQuery({ queryKey: ['orders', page], queryFn: () => orderApi.getOrders(page), staleTime: 30_000 });
 }
 
 export function useOrder(id: string) {
-  return useQuery({
-    queryKey:  ['order', id],
-    queryFn:   () => orderApi.getOrder(id),
-    enabled:   !!id,
-    staleTime: 15_000,
-  });
+  return useQuery({ queryKey: ['order', id], queryFn: () => orderApi.getOrder(id), enabled: !!id, staleTime: 15_000 });
 }
