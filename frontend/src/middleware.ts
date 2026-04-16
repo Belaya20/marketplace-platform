@@ -1,6 +1,5 @@
 // src/middleware.ts
-// Admin routes are completely removed — admin panel runs as a separate
-// Next.js app on port 3001. The frontend (port 3000) has no admin routes.
+ 
 import { NextRequest, NextResponse } from 'next/server';
 
 export function middleware(request: NextRequest) {

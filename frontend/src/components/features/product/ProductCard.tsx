@@ -20,21 +20,6 @@ import api from '@/lib/api';
 import type { Product, Category, FlashSale, Banner } from '@/types';
 import clsx from 'clsx';
 
-// ═══════════════════════════════════════════════════════════════════════
-// FIXES APPLIED:
-//  1. Discount badge — truncate + max-w so it never overflows on mobile
-//  2. Price row — flex-wrap so long ETB values wrap instead of overflow
-//  3. Card info area — min-w-0 + overflow-hidden at every level
-//  4. Add-to-cart overlay — proper z-index layering with flash bar
-//  5. FlashSaleMap hook — guard against running inside each card when
-//     flashMap is provided by the parent ProductGrid
-//  6. Image badge stack — shrink-0 + max-w to prevent badge text overflow
-//  7. FlashCountdownBar — lower z-index than add-to-cart button
-//  8. HomeBanners empty state — responsive text sizing
-//  9. CategoryGrid — 4 cols on smallest screens to prevent icon overflow
-// 10. DiscountCodePill — min-w-0 + truncate on code text for tiny screens
-// ═══════════════════════════════════════════════════════════════════════
-
 // ── Flash sale map ────────────────────────────────────────────────────────────
 function useFlashSaleMap(enabled = true) {
   const { data: sales = [] } = useQuery({
@@ -42,7 +27,7 @@ function useFlashSaleMap(enabled = true) {
     queryFn:         flashSaleApi.getActive,
     staleTime:       60_000,
     refetchInterval: 60_000,
-    enabled,          // FIX: don't run if parent already provides flashMap
+    enabled,          
   });
 
   return useMemo(() => {

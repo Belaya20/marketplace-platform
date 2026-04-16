@@ -36,7 +36,7 @@ export default function ForgotPasswordPage() {
   return (
     <div className="card p-8">
       <div className="text-center mb-7">
-        <Link href="/" className="text-2xl font-bold text-violet-600">Marketplace</Link>
+        <Link href="/" className="text-2xl font-bold text-violet-600">AddisMarket</Link>
         <h1 className="text-xl font-semibold text-gray-900 mt-3">Reset your password</h1>
         <p className="text-gray-500 text-sm mt-1">Enter your email to receive a reset code.</p>
       </div>
