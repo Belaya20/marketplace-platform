@@ -1,5 +1,6 @@
 'use client';
 // src/components/features/product/ProductCard.tsx
+
 import Image from 'next/image';
 import Link  from 'next/link';
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
@@ -21,13 +22,14 @@ import type { Product, Category, FlashSale, Banner } from '@/types';
 import clsx from 'clsx';
 
 // ── Flash sale map ────────────────────────────────────────────────────────────
+
 function useFlashSaleMap(enabled = true) {
   const { data: sales = [] } = useQuery({
     queryKey:        ['flash-sales'],
     queryFn:         flashSaleApi.getActive,
     staleTime:       60_000,
     refetchInterval: 60_000,
-    enabled,          
+    enabled,
   });
 
   return useMemo(() => {
@@ -49,6 +51,7 @@ function useFlashSaleMap(enabled = true) {
 }
 
 // ── Live countdown ────────────────────────────────────────────────────────────
+
 function useCountdown(endDate: string) {
   const calc = useCallback(() => {
     const diff = new Date(endDate).getTime() - Date.now();
@@ -72,13 +75,17 @@ function useCountdown(endDate: string) {
 function pad(n: number) { return String(n).padStart(2, '0'); }
 
 // ── PRODUCT CARD ──────────────────────────────────────────────────────────────
-interface CardProps { product: Product; showAddToCart?: boolean; flashMap?: Record<string, any>; }
+
+interface CardProps {
+  product:        Product;
+  showAddToCart?: boolean;
+  flashMap?:      Record<string, any>;
+}
 
 export function ProductCard({ product, showAddToCart = true, flashMap }: CardProps) {
-  const { addItem, isAdding } = useCart();
+  const { addItem, isAdding }                                = useCart();
   const { isInWishlist, addItem: addWish, removeItem: rmWish } = useWishlist();
 
-  // FIX: only run the query when no flashMap is provided by parent
   const localFlashMap = useFlashSaleMap(!flashMap);
   const map           = flashMap ?? localFlashMap;
 
@@ -97,25 +104,22 @@ export function ProductCard({ product, showAddToCart = true, flashMap }: CardPro
       : 0;
   const outOfStock = (product.stock_qty ?? 1) === 0;
   const isFlash    = salePrice !== null;
-
-  const avgRating   = Number(product.avg_rating   ?? 0);
+  const avgRating  = Number(product.avg_rating   ?? 0);
   const reviewCount = Number(product.review_count ?? 0);
 
   return (
     <div className={clsx(
-      'group flex flex-col gap-2.5 sm:gap-3 relative w-full rounded-xl p-2 sm:p-2.5 bg-white border',
+      'group flex flex-col gap-2.5 sm:gap-3 relative w-full rounded-xl p-2 sm:p-2.5 bg-white border min-w-0',
       'transition-all duration-300 ease-[cubic-bezier(0.25,1,0.5,1)]',
-      // FIX: min-w-0 prevents the card itself from overflowing its grid cell
-      'min-w-0',
       isFlash
         ? 'border-red-100 hover:border-red-200 hover:shadow-[0_8px_30px_rgba(239,68,68,0.12)]'
-        : 'border-transparent hover:border-gray-100 hover:shadow-[0_8px_30px_rgb(0,0,0,0.06)]'
+        : 'border-transparent hover:border-gray-100 hover:shadow-[0_8px_30px_rgb(0,0,0,0.06)]',
     )}>
       {isFlash && (
         <div className="absolute inset-0 rounded-xl ring-1 ring-red-400/20 pointer-events-none z-0" />
       )}
 
-      {/* ── Image ── */}
+      {/* Image */}
       <div className="relative aspect-square w-full bg-gray-50 rounded-lg overflow-hidden">
         <Link href={`/product/${product.slug}`} className="block w-full h-full">
           {product.primary_image ? (
@@ -133,7 +137,7 @@ export function ProductCard({ product, showAddToCart = true, flashMap }: CardPro
           )}
         </Link>
 
-        {/* FIX: Badges — max-w + truncate so long % values don't overflow */}
+        {/* Badges */}
         <div className="absolute top-2 left-2 flex flex-col items-start gap-1 z-20 max-w-[60%]">
           {isFlash && (
             <span className="flex items-center gap-0.5 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow-sm shadow-red-500/30 animate-pulse whitespace-nowrap">
@@ -141,7 +145,6 @@ export function ProductCard({ product, showAddToCart = true, flashMap }: CardPro
             </span>
           )}
           {discPct > 0 && (
-            // FIX: truncate + max-w prevents badge text pushing outside card
             <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap max-w-full truncate">
               -{discPct}%
             </span>
@@ -153,7 +156,7 @@ export function ProductCard({ product, showAddToCart = true, flashMap }: CardPro
           )}
         </div>
 
-        {/* Wishlist */}
+        {/* Wishlist button */}
         <button
           onClick={e => { e.preventDefault(); inWish ? rmWish(product.id) : addWish(product.id); }}
           className="absolute top-2 right-2 p-1.5 sm:p-2 bg-white/90 backdrop-blur-md rounded-full shadow-sm z-20
@@ -162,12 +165,15 @@ export function ProductCard({ product, showAddToCart = true, flashMap }: CardPro
             transition-all duration-300 hover:bg-white active:scale-95"
           aria-label={inWish ? 'Remove from wishlist' : 'Add to wishlist'}
         >
-          <Heart size={14} strokeWidth={2}
+          <Heart
+            size={14}
+            strokeWidth={2}
             className={clsx('transition-colors duration-300',
-              inWish ? 'fill-red-500 text-red-500' : 'text-gray-400 hover:text-gray-900')} />
+              inWish ? 'fill-red-500 text-red-500' : 'text-gray-400 hover:text-gray-900')}
+          />
         </button>
 
-        {/* FIX: Flash countdown — z-10 so add-to-cart button (z-20) renders above it */}
+        {/* Flash sale countdown bar */}
         {isFlash && flashItem && (
           <FlashCountdownBar
             endsAt={flashItem.ends_at}
@@ -176,13 +182,13 @@ export function ProductCard({ product, showAddToCart = true, flashMap }: CardPro
           />
         )}
 
-        {/* Add to cart — FIX: z-20 so it's always above the flash bar */}
+        {/* Add to cart */}
         {showAddToCart && (
           <div className={clsx(
             'absolute bottom-0 left-0 w-full p-1.5 sm:p-2 z-20',
             'transition-all duration-300 ease-[cubic-bezier(0.25,1,0.5,1)]',
             'translate-y-0 opacity-100',
-            'sm:translate-y-[110%] sm:opacity-0 sm:group-hover:translate-y-0 sm:group-hover:opacity-100'
+            'sm:translate-y-[110%] sm:opacity-0 sm:group-hover:translate-y-0 sm:group-hover:opacity-100',
           )}>
             <button
               onClick={e => { e.preventDefault(); addItem({ variantId, quantity: 1 }); }}
@@ -192,7 +198,7 @@ export function ProductCard({ product, showAddToCart = true, flashMap }: CardPro
                 'transition-colors shadow-lg disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none',
                 isFlash
                   ? 'bg-red-500/95 hover:bg-red-600 shadow-red-500/25'
-                  : 'bg-violet-600/95 hover:bg-violet-700 shadow-violet-600/25'
+                  : 'bg-violet-600/95 hover:bg-violet-700 shadow-violet-600/25',
               )}
             >
               {outOfStock ? 'Out of stock' : isFlash ? '⚡ Flash price' : 'Add to cart'}
@@ -201,11 +207,9 @@ export function ProductCard({ product, showAddToCart = true, flashMap }: CardPro
         )}
       </div>
 
-      {/* ── Info — FIX: min-w-0 + overflow-hidden at every level ── */}
+      {/* Product info */}
       <div className="flex flex-col gap-1 px-0.5 sm:px-1 min-w-0 overflow-hidden">
-        {/* Category + rating row */}
         <div className="flex justify-between items-center gap-1.5 min-w-0">
-          {/* FIX: min-w-0 + truncate so category name doesn't push rating off */}
           <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wide truncate min-w-0">
             {product.category_name ?? product.brand_name ?? ''}
           </p>
@@ -217,26 +221,23 @@ export function ProductCard({ product, showAddToCart = true, flashMap }: CardPro
           )}
         </div>
 
-        {/* Product name */}
         <Link href={`/product/${product.slug}`} className="block min-w-0">
           <h3 className={clsx(
             'text-xs sm:text-sm font-medium line-clamp-2 leading-snug transition-colors',
-            isFlash ? 'text-gray-900 group-hover:text-red-600' : 'text-gray-900 group-hover:text-violet-600'
+            isFlash ? 'text-gray-900 group-hover:text-red-600' : 'text-gray-900 group-hover:text-violet-600',
           )}>
             {product.name}
           </h3>
         </Link>
 
-        {/* FIX: Price row — flex-wrap + min-w-0 prevents ETB overflow on small screens */}
         <div className="flex items-baseline gap-1.5 flex-wrap min-w-0 mt-0.5">
           <span className={clsx(
             'text-sm sm:text-base font-bold tracking-tight shrink-0',
-            isFlash ? 'text-red-600' : 'text-violet-600'
+            isFlash ? 'text-red-600' : 'text-violet-600',
           )}>
             {formatETB(price)}
           </span>
           {hasDis && origP > price && (
-            // FIX: shrink-0 so the strikethrough price doesn't get squeezed to nothing
             <span className="text-[10px] sm:text-xs text-gray-400 line-through font-medium shrink-0">
               {formatETB(origP)}
             </span>
@@ -248,7 +249,7 @@ export function ProductCard({ product, showAddToCart = true, flashMap }: CardPro
 }
 
 // ── Flash countdown bar ───────────────────────────────────────────────────────
-// FIX: z-10 (was implicitly above add-to-cart) — now below z-20 add-to-cart
+
 function FlashCountdownBar({ endsAt, soldQty, maxQty }: {
   endsAt: string; soldQty: number; maxQty: number;
 }) {
@@ -277,8 +278,8 @@ function FlashCountdownBar({ endsAt, soldQty, maxQty }: {
 }
 
 // ── PRODUCT GRID ──────────────────────────────────────────────────────────────
+
 export function ProductGrid({ products }: { products: Product[] }) {
-  // FIX: flashMap built once here, passed to every card — no duplicate queries
   const flashMap = useFlashSaleMap(true);
 
   if (!products.length) return (
@@ -289,7 +290,7 @@ export function ProductGrid({ products }: { products: Product[] }) {
   );
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5 sm:gap-3 sm:gap-4">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5 sm:gap-4">
       {products.map(p => (
         <ProductCard key={p.id} product={p} flashMap={flashMap} />
       ))}
@@ -297,13 +298,12 @@ export function ProductGrid({ products }: { products: Product[] }) {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// HOME BANNERS
-// ═══════════════════════════════════════════════════════════════════
+// ── HOME BANNERS ──────────────────────────────────────────────────────────────
+
 export function HomeBanners() {
   const { data: banners = [] } = useQuery({
-    queryKey: ['banners'],
-    queryFn:  cmsApi.getBanners,
+    queryKey:  ['banners'],
+    queryFn:   cmsApi.getBanners,
     staleTime: 300_000,
   });
 
@@ -313,15 +313,16 @@ export function HomeBanners() {
     <div className="container-page py-4 sm:py-6">
       <div className="bg-gradient-to-br from-violet-600 to-violet-800 rounded-2xl h-48 sm:h-64 md:h-72 flex items-center justify-center px-6 sm:px-8 shadow-md">
         <div className="text-center text-white max-w-lg">
-          {/* FIX: text-xl on mobile, scale up on larger screens */}
           <h1 className="text-xl sm:text-3xl md:text-4xl font-bold mb-2 sm:mb-3 leading-tight tracking-tight">
             Welcome to AddisMarket
           </h1>
           <p className="text-violet-100 text-xs sm:text-sm md:text-base mb-4 sm:mb-6">
             Discover thousands of products from verified sellers
           </p>
-          <Link href="/search"
-            className="inline-block bg-white text-violet-700 font-bold px-5 py-2 sm:px-8 sm:py-3 rounded-xl hover:bg-violet-50 transition-colors shadow-sm active:scale-95 text-sm sm:text-base">
+          <Link
+            href="/search"
+            className="inline-block bg-white text-violet-700 font-bold px-5 py-2 sm:px-8 sm:py-3 rounded-xl hover:bg-violet-50 transition-colors shadow-sm active:scale-95 text-sm sm:text-base"
+          >
             Shop now
           </Link>
         </div>
@@ -350,32 +351,30 @@ function BannerSlide({ banner: b, priority = false, className }: {
       href={b.link_url || '#'}
       className={clsx(
         'group block relative h-48 sm:h-64 md:h-80 overflow-hidden shadow-lg',
-        className ?? 'rounded-2xl'
+        className ?? 'rounded-2xl',
       )}
     >
       <Image
-        src={b.image_url} alt={b.title} fill priority={priority}
+        src={b.image_url}
+        alt={b.title}
+        fill
+        priority={priority}
         className="object-cover transition-transform duration-[2s] ease-out group-hover:scale-[1.03]"
         sizes="100vw"
       />
       <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/30 to-transparent" />
       <div className="absolute inset-0 flex items-center px-5 sm:px-8 md:px-14">
         <div className="text-white max-w-xl min-w-0">
-          {/* FIX: text-xl on mobile */}
-          <h2 className="text-xl sm:text-3xl md:text-4xl font-black mb-1.5 sm:mb-2 leading-tight tracking-tight
-            transition-transform duration-500 group-hover:-translate-y-1 line-clamp-2">
+          <h2 className="text-xl sm:text-3xl md:text-4xl font-black mb-1.5 sm:mb-2 leading-tight tracking-tight transition-transform duration-500 group-hover:-translate-y-1 line-clamp-2">
             {b.title}
           </h2>
           {b.subtitle && (
-            <p className="text-white/80 text-xs sm:text-base mb-3 sm:mb-6 opacity-90
-              transition-transform duration-500 delay-75 group-hover:-translate-y-1 line-clamp-2">
+            <p className="text-white/80 text-xs sm:text-base mb-3 sm:mb-6 opacity-90 transition-transform duration-500 delay-75 group-hover:-translate-y-1 line-clamp-2">
               {b.subtitle}
             </p>
           )}
           {b.cta_text && (
-            <span className="inline-flex items-center gap-1.5 sm:gap-2 bg-white text-gray-900 font-bold
-              text-xs sm:text-sm px-4 py-2 sm:px-6 sm:py-3 rounded-xl shadow-lg
-              transition-all duration-200 group-hover:-translate-y-1 group-hover:shadow-xl">
+            <span className="inline-flex items-center gap-1.5 sm:gap-2 bg-white text-gray-900 font-bold text-xs sm:text-sm px-4 py-2 sm:px-6 sm:py-3 rounded-xl shadow-lg transition-all duration-200 group-hover:-translate-y-1 group-hover:shadow-xl">
               {b.cta_text} <ArrowRight size={13} />
             </span>
           )}
@@ -389,8 +388,8 @@ function BannerCarousel({ banners }: { banners: Banner[] }) {
   const [current,   setCurrent]   = useState(0);
   const [paused,    setPaused]    = useState(false);
   const [animating, setAnimating] = useState(false);
-  const touchStartX = useRef<number | null>(null);
-  const count = banners.length;
+  const touchStartX               = useRef<number | null>(null);
+  const count                     = banners.length;
 
   const goTo = useCallback((idx: number) => {
     if (animating) return;
@@ -404,7 +403,7 @@ function BannerCarousel({ banners }: { banners: Banner[] }) {
 
   useEffect(() => {
     if (paused) return;
-    const id = setInterval(next, 5000);
+    const id = setInterval(next, 5_000);
     return () => clearInterval(id);
   }, [paused, next]);
 
@@ -427,9 +426,9 @@ function BannerCarousel({ banners }: { banners: Banner[] }) {
             key={b.id}
             className={clsx(
               'absolute inset-0 transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)]',
-              i === current                             ? 'opacity-100 translate-x-0 z-10'
-              : i === ((current - 1 + count) % count)  ? 'opacity-0 -translate-x-8 z-0'
-                                                       : 'opacity-0 translate-x-8 z-0'
+              i === current                            ? 'opacity-100 translate-x-0 z-10'
+              : i === ((current - 1 + count) % count) ? 'opacity-0 -translate-x-8 z-0'
+                                                      : 'opacity-0 translate-x-8 z-0',
             )}
           >
             <BannerSlide banner={b} priority={i === 0} className="" />
@@ -437,34 +436,26 @@ function BannerCarousel({ banners }: { banners: Banner[] }) {
         ))}
       </div>
 
-      {/* Nav buttons */}
       <button onClick={prev} aria-label="Previous"
-        className="absolute left-2 sm:left-3 top-1/2 -translate-y-1/2 z-20 w-8 h-8 sm:w-10 sm:h-10 rounded-full
-          bg-black/30 backdrop-blur-sm text-white flex items-center justify-center
-          hover:bg-black/50 active:scale-95 transition-all duration-200">
+        className="absolute left-2 sm:left-3 top-1/2 -translate-y-1/2 z-20 w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-black/30 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/50 active:scale-95 transition-all duration-200">
         <ChevronLeft size={16} />
       </button>
       <button onClick={next} aria-label="Next"
-        className="absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 z-20 w-8 h-8 sm:w-10 sm:h-10 rounded-full
-          bg-black/30 backdrop-blur-sm text-white flex items-center justify-center
-          hover:bg-black/50 active:scale-95 transition-all duration-200">
+        className="absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 z-20 w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-black/30 backdrop-blur-sm text-white flex items-center justify-center hover:bg-black/50 active:scale-95 transition-all duration-200">
         <ChevronRight size={16} />
       </button>
 
-      {/* Dots */}
       <div className="absolute bottom-3 left-0 right-0 z-20 flex items-center justify-center gap-1.5">
         {banners.map((_, i) => (
           <button key={i} onClick={() => goTo(i)} aria-label={`Banner ${i + 1}`}
-            className={clsx(
-              'rounded-full transition-all duration-300',
-              i === current ? 'w-5 h-1.5 bg-white shadow-sm' : 'w-1.5 h-1.5 bg-white/50 hover:bg-white/80'
-            )} />
+            className={clsx('rounded-full transition-all duration-300',
+              i === current ? 'w-5 h-1.5 bg-white shadow-sm' : 'w-1.5 h-1.5 bg-white/50 hover:bg-white/80')} />
         ))}
       </div>
 
       {!paused && (
         <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white/10 z-20 overflow-hidden">
-          <ProgressBar key={current} duration={5000} />
+          <ProgressBar key={current} duration={5_000} />
         </div>
       )}
 
@@ -482,12 +473,15 @@ function ProgressBar({ duration }: { duration: number }) {
     return () => cancelAnimationFrame(t);
   }, []);
   return (
-    <div className="h-full bg-white/60 rounded-full"
-      style={{ width: `${width}%`, transition: `width ${duration}ms linear` }} />
+    <div
+      className="h-full bg-white/60 rounded-full"
+      style={{ width: `${width}%`, transition: `width ${duration}ms linear` }}
+    />
   );
 }
 
 // ── FLASH SALE SECTION ────────────────────────────────────────────────────────
+
 export function FlashSaleSection() {
   const { data: sales = [] } = useQuery({
     queryKey:        ['flash-sales'],
@@ -511,7 +505,6 @@ export function FlashSaleSection() {
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                {/* FIX: truncate sale title if too long */}
                 <h2 className="text-lg sm:text-xl md:text-2xl font-bold text-gray-900 tracking-tight truncate max-w-[180px] sm:max-w-none">
                   {sale.title}
                 </h2>
@@ -527,8 +520,7 @@ export function FlashSaleSection() {
           <FlashSaleCountdown endsAt={sale.ends_at} />
         </div>
 
-        {/* FIX: 2 cols on tiny screens, 3 on sm, 5 on lg */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3 sm:gap-4 relative z-10">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-4 relative z-10">
           {(sale.items as any[]).slice(0, 5).map((item: any) => (
             <FlashSaleCard key={item.id} item={item} />
           ))}
@@ -575,9 +567,10 @@ function FlashSaleCard({ item }: { item: any }) {
     : 0;
 
   return (
-    <Link href={`/product/${item.slug}`}
-      className="group bg-white rounded-xl overflow-hidden shadow-sm border border-transparent
-        hover:border-red-100 hover:shadow-lg hover:shadow-red-500/10 transition-all duration-300 flex flex-col min-w-0">
+    <Link
+      href={`/product/${item.slug}`}
+      className="group bg-white rounded-xl overflow-hidden shadow-sm border border-transparent hover:border-red-100 hover:shadow-lg hover:shadow-red-500/10 transition-all duration-300 flex flex-col min-w-0"
+    >
       <div className="aspect-square bg-gray-50 overflow-hidden relative">
         {item.image_url ? (
           <Image src={item.image_url} alt={item.name} fill
@@ -594,12 +587,11 @@ function FlashSaleCard({ item }: { item: any }) {
           </div>
         )}
       </div>
-      {/* FIX: min-w-0 + overflow-hidden to prevent text overflow */}
+
       <div className="p-2 sm:p-3 flex flex-col flex-1 gap-1 min-w-0 overflow-hidden">
         <h3 className="text-xs sm:text-sm font-medium text-gray-900 line-clamp-2 group-hover:text-red-600 transition-colors leading-snug">
           {item.name}
         </h3>
-        {/* FIX: flex-wrap for price row */}
         <div className="flex items-baseline gap-1.5 flex-wrap">
           <p className="text-red-600 font-bold text-sm sm:text-base shrink-0">{formatETB(Number(item.sale_price))}</p>
           {item.original_price && Number(item.original_price) > Number(item.sale_price) && (
@@ -615,8 +607,10 @@ function FlashSaleCard({ item }: { item: any }) {
               </span>
             </div>
             <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
-              <div className={clsx('h-full rounded-full transition-all duration-700', pct > 80 ? 'bg-red-500' : 'bg-orange-400')}
-                style={{ width: `${pct}%` }} />
+              <div
+                className={clsx('h-full rounded-full transition-all duration-700', pct > 80 ? 'bg-red-500' : 'bg-orange-400')}
+                style={{ width: `${pct}%` }}
+              />
             </div>
           </div>
         )}
@@ -633,10 +627,11 @@ function FlashSaleCard({ item }: { item: any }) {
 }
 
 // ── DISCOUNT CODES STRIP ──────────────────────────────────────────────────────
+
 export function DiscountCodesStrip() {
   const { data: codes = [] } = useQuery({
-    queryKey: ['public-discounts'],
-    queryFn:  () => api.get('/discounts/public').then((r: any) => r.data.data ?? []),
+    queryKey:  ['public-discounts'],
+    queryFn:   () => api.get('/discounts/public').then((r: any) => r.data.data ?? []),
     staleTime: 120_000,
   });
   if (!(codes as any[]).length) return null;
@@ -665,7 +660,7 @@ function DiscountCodePill({ code }: { code: any }) {
     const diff = new Date(code.expires_at).getTime() - Date.now();
     if (diff <= 0) return 'Expired';
     const days  = Math.floor(diff / 86_400_000);
-    if (days > 1) return `${days}d left`;
+    if (days > 1)  return `${days}d left`;
     const hours = Math.floor(diff / 3_600_000);
     if (hours > 0) return `${hours}h left`;
     return 'Expiring soon';
@@ -681,33 +676,30 @@ function DiscountCodePill({ code }: { code: any }) {
     e.preventDefault();
     navigator.clipboard.writeText(code.code);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+    setTimeout(() => setCopied(false), 2_500);
   };
 
   return (
-    <button onClick={copy}
-      className="group relative flex items-center gap-0 rounded-xl overflow-hidden
-        border border-dashed border-violet-300 hover:border-violet-500
-        transition-all duration-200 hover:shadow-md hover:shadow-violet-500/10 text-left w-full min-w-0">
+    <button
+      onClick={copy}
+      className="group relative flex items-center gap-0 rounded-xl overflow-hidden border border-dashed border-violet-300 hover:border-violet-500 transition-all duration-200 hover:shadow-md hover:shadow-violet-500/10 text-left w-full min-w-0"
+    >
       <div className="w-1.5 sm:w-2 self-stretch bg-violet-500 group-hover:bg-violet-600 transition-colors shrink-0" />
       <div className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-violet-50/50 group-hover:bg-violet-50 transition-colors min-w-0 overflow-hidden">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1 overflow-hidden">
-            {/* FIX: truncate so long codes don't overflow on tiny screens */}
             <p className="font-mono font-bold text-violet-700 tracking-widest text-xs sm:text-sm truncate">
               {code.code}
             </p>
             <p className="text-[11px] sm:text-xs font-semibold text-gray-700 mt-0.5">{discLabel}</p>
             {code.min_order > 0 && (
-              <p className="text-[10px] sm:text-[11px] text-gray-400 mt-0.5">
-                Min. ETB {code.min_order}
-              </p>
+              <p className="text-[10px] sm:text-[11px] text-gray-400 mt-0.5">Min. ETB {code.min_order}</p>
             )}
           </div>
           <div className="flex flex-col items-end gap-1 shrink-0">
             <div className={clsx(
               'flex items-center gap-1 sm:gap-1.5 text-[11px] sm:text-xs font-semibold px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg transition-all whitespace-nowrap',
-              copied ? 'bg-emerald-500 text-white' : 'bg-violet-600 text-white group-hover:bg-violet-700'
+              copied ? 'bg-emerald-500 text-white' : 'bg-violet-600 text-white group-hover:bg-violet-700',
             )}>
               {copied ? <><Check size={10} />Copied!</> : <><Copy size={10} />Copy</>}
             </div>
@@ -724,12 +716,13 @@ function DiscountCodePill({ code }: { code: any }) {
 }
 
 // ── PRODUCT SECTION ───────────────────────────────────────────────────────────
+
 export function ProductSection({ title, params, apiKey }: {
   title: string; params: any; apiKey: string;
 }) {
   const { data } = useQuery({
-    queryKey: ['products', apiKey, params],
-    queryFn:  () => productApi.search({ ...params, limit: 10 }),
+    queryKey:  ['products', apiKey, params],
+    queryFn:   () => productApi.search({ ...params, limit: 10 }),
     staleTime: 120_000,
   });
   const products = (data?.data ?? []) as Product[];
@@ -739,8 +732,10 @@ export function ProductSection({ title, params, apiKey }: {
     <div className="py-5 sm:py-8">
       <div className="flex items-center justify-between mb-4 sm:mb-6 gap-3">
         <h2 className="text-lg sm:text-xl md:text-2xl font-bold text-gray-900 tracking-tight">{title}</h2>
-        <Link href={`/search?sort=${params.sort}`}
-          className="group flex items-center gap-1 sm:gap-1.5 text-xs sm:text-sm font-semibold text-violet-600 hover:text-violet-800 transition-colors bg-violet-50 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-lg hover:bg-violet-100 shrink-0">
+        <Link
+          href={`/search?sort=${params.sort}`}
+          className="group flex items-center gap-1 sm:gap-1.5 text-xs sm:text-sm font-semibold text-violet-600 hover:text-violet-800 transition-colors bg-violet-50 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-lg hover:bg-violet-100 shrink-0"
+        >
           View all <ArrowRight size={13} className="group-hover:translate-x-1 transition-transform" />
         </Link>
       </div>
@@ -750,42 +745,43 @@ export function ProductSection({ title, params, apiKey }: {
 }
 
 // ── CATEGORY GRID ─────────────────────────────────────────────────────────────
+
 const ICON_MAP: Array<[string[], React.ComponentType<any>]> = [
-  [['phone', 'mobile'],           Smartphone   ],
-  [['tablet', 'ipad'],            Tablet       ],
-  [['laptop', 'computer'],        Laptop       ],
-  [['monitor', 'screen'],         Monitor      ],
-  [['tv', 'television'],          Tv           ],
-  [['print'],                     Printer      ],
-  [['cpu', 'processor'],          Cpu          ],
-  [['audio', 'speaker'],          Speaker      ],
-  [['headphone', 'earphone'],     Headphones   ],
-  [['mic'],                       Mic          ],
-  [['radio'],                     Radio        ],
-  [['tech', 'electronic'],        Plug         ],
-  [['cloth', 'fashion'],          Shirt        ],
-  [['watch', 'jewelry'],          Watch        ],
-  [['glass', 'eyewear'],          Glasses      ],
-  [['bag', 'luggage'],            Briefcase    ],
-  [['home', 'furniture'],         Sofa         ],
-  [['kitchen', 'cook'],           UtensilsCrossed],
-  [['beauty', 'cosmetic'],        Sparkles     ],
-  [['hair', 'salon'],             Scissors     ],
-  [['health', 'medical'],         HeartPulse   ],
-  [['food', 'grocery'],           Coffee       ],
-  [['sport', 'fitness'],          Dumbbell     ],
-  [['bike', 'bicycle'],           Bike         ],
-  [['outdoor', 'camp'],           Tent         ],
-  [['garden', 'flower'],          Flower2      ],
-  [['auto', 'car'],               Car          ],
-  [['tool', 'hardware'],          Wrench       ],
-  [['music', 'instrument'],       Music        ],
-  [['camera', 'photo'],           Camera       ],
-  [['art', 'craft'],              Palette      ],
-  [['book', 'read'],              BookOpen     ],
-  [['game', 'gaming'],            Gamepad2     ],
-  [['baby', 'kid'],               Baby         ],
-  [['pet', 'dog'],                PawPrint     ],
+  [['phone', 'mobile'],       Smartphone    ],
+  [['tablet', 'ipad'],        Tablet        ],
+  [['laptop', 'computer'],    Laptop        ],
+  [['monitor', 'screen'],     Monitor       ],
+  [['tv', 'television'],      Tv            ],
+  [['print'],                 Printer       ],
+  [['cpu', 'processor'],      Cpu           ],
+  [['audio', 'speaker'],      Speaker       ],
+  [['headphone', 'earphone'], Headphones    ],
+  [['mic'],                   Mic           ],
+  [['radio'],                 Radio         ],
+  [['tech', 'electronic'],    Plug          ],
+  [['cloth', 'fashion'],      Shirt         ],
+  [['watch', 'jewelry'],      Watch         ],
+  [['glass', 'eyewear'],      Glasses       ],
+  [['bag', 'luggage'],        Briefcase     ],
+  [['home', 'furniture'],     Sofa          ],
+  [['kitchen', 'cook'],       UtensilsCrossed],
+  [['beauty', 'cosmetic'],    Sparkles      ],
+  [['hair', 'salon'],         Scissors      ],
+  [['health', 'medical'],     HeartPulse    ],
+  [['food', 'grocery'],       Coffee        ],
+  [['sport', 'fitness'],      Dumbbell      ],
+  [['bike', 'bicycle'],       Bike          ],
+  [['outdoor', 'camp'],       Tent          ],
+  [['garden', 'flower'],      Flower2       ],
+  [['auto', 'car'],           Car           ],
+  [['tool', 'hardware'],      Wrench        ],
+  [['music', 'instrument'],   Music         ],
+  [['camera', 'photo'],       Camera        ],
+  [['art', 'craft'],          Palette       ],
+  [['book', 'read'],          BookOpen      ],
+  [['game', 'gaming'],        Gamepad2      ],
+  [['baby', 'kid'],           Baby          ],
+  [['pet', 'dog'],            PawPrint      ],
 ];
 
 function getCategoryIcon(name: string): React.ComponentType<any> {
@@ -798,35 +794,40 @@ function getCategoryIcon(name: string): React.ComponentType<any> {
 
 export function CategoryGrid() {
   const { data: categories = [] } = useQuery({
-    queryKey: ['categories'],
-    queryFn:  catalogApi.getCategories,
+    queryKey:  ['categories'],
+    queryFn:   catalogApi.getCategories,
     staleTime: 600_000,
   });
 
   return (
     <div className="py-5 sm:py-8">
-      {/* FIX: 4 cols on xs, 5 on sm, 8 on md, 10 on lg — prevents icon overflow */}
-      <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-8 lg:grid-cols-10 gap-1.5 sm:gap-2 md:gap-3">
+      <div className="grid grid-cols-5 sm:grid-cols-5 md:grid-cols-8 lg:grid-cols-10 gap-1 sm:gap-2 md:gap-3">
         {(categories as Category[]).slice(0, 10).map(cat => {
           const Icon = getCategoryIcon(cat.name);
           return (
-            <Link key={cat.id} href={`/category/${cat.slug}`}
-              className="flex flex-col items-center gap-1 sm:gap-1.5 p-1.5 sm:p-2 md:p-3 rounded-xl
-                hover:bg-violet-50 transition-all duration-300 group text-center active:scale-95 min-w-0">
-              <div className="w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 bg-gray-100 rounded-xl
-                group-hover:bg-violet-100 transition-colors duration-300
-                flex items-center justify-center overflow-hidden shrink-0">
+            <Link
+              key={cat.id}
+              href={`/category/${cat.slug}`}
+              className="flex flex-col items-center gap-1 sm:gap-1.5 p-1 sm:p-2 md:p-3 rounded-xl hover:bg-violet-50 transition-all duration-300 group text-center active:scale-95 min-w-0"
+            >
+              <div className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 bg-gray-100 rounded-xl group-hover:bg-violet-100 transition-colors duration-300 flex items-center justify-center overflow-hidden shrink-0">
                 {cat.image_url ? (
-                  <Image src={cat.image_url} alt={cat.name} width={56} height={56}
-                    className="object-cover w-full h-full transition-transform duration-500 group-hover:scale-110" />
+                  <Image
+                    src={cat.image_url}
+                    alt={cat.name}
+                    width={48}
+                    height={48}
+                    className="object-cover w-full h-full transition-transform duration-500 group-hover:scale-110"
+                  />
                 ) : (
-                  <Icon size={18} strokeWidth={1.5}
-                    className="text-gray-500 group-hover:text-violet-600 transition-colors duration-300" />
+                  <Icon
+                    size={15}
+                    strokeWidth={1.5}
+                    className="text-gray-500 group-hover:text-violet-600 transition-colors duration-300"
+                  />
                 )}
               </div>
-              {/* FIX: truncate category name on tiny screens */}
-              <span className="text-[9px] sm:text-[10px] md:text-xs text-gray-600 group-hover:text-violet-700
-                font-medium line-clamp-2 leading-tight w-full transition-colors duration-300">
+              <span className="text-[9px] sm:text-[10px] md:text-xs text-gray-600 group-hover:text-violet-700 font-medium line-clamp-2 leading-tight w-full transition-colors duration-300">
                 {cat.name}
               </span>
             </Link>
