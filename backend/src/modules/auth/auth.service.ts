@@ -7,33 +7,46 @@
 // OTP SECURITY MODEL
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //
-//  Generation:   crypto.randomInt(100000, 1000000) — OS CSPRNG, not Math.random()
-//  Storage:      SHA-256 hash only — plaintext never touches the DB
-//  Expiry:       10 minutes
-//  Attempts:     Max 5 wrong attempts per token, then invalidated
-//  Resend:       60-second per-user cooldown (independent of IP rate limiter)
-//  Cleanup:      Old expired/used tokens pruned on every new OTP generation
-//  Delivery:     Fire-and-forget email (OTP already in DB before email attempt)
-//                → Works without email: Railway logs always show the code
-//                → Works with SKIP_EMAIL_VERIFY=true Railway var (testing)
-//                → Works fully once SMTP vars are set in Railway
+//  Generation:  crypto.randomInt(100000, 1000000) — OS CSPRNG, not Math.random()
+//  Storage:     SHA-256 hash only — plaintext never touches the DB
+//  Expiry:      10 minutes
+//  Attempts:    Max 5 wrong attempts per token, then invalidated
+//  Resend:      60-second per-user cooldown (independent of IP rate limiter)
+//  Cleanup:     Old expired/used tokens pruned on every new OTP generation
+//  Delivery:    Fire-and-forget email (OTP already in DB before email attempt)
+//               → Works without email: Railway Deploy Logs always show the code
+//               → Works with OTP_MASTER_BYPASS=true + code 000000
+//               → Works with SKIP_EMAIL_VERIFY=true (any code accepted)
+//               → Works fully once SMTP vars are set in Railway
+//
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// BYPASS MODES — three ways to verify without real email
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//
+//  MODE A — Check Railway Deploy Logs (always available, no env vars needed)
+//    Every OTP is printed to logs in a ━━━ block.
+//    Open Railway → your service → Deploy Logs → search for the email.
+//    Enter the real 6-digit code shown there.
+//
+//  MODE B — 000000 master bypass (OTP_MASTER_BYPASS=true in Railway)
+//    Set OTP_MASTER_BYPASS=true → entering 000000 verifies any account.
+//    Works in ALL environments including production.
+//    Remove the var when you want to enforce real OTP again.
+//
+//  MODE C — Any-code bypass (SKIP_EMAIL_VERIFY=true in Railway)
+//    ANY code is accepted, no DB check at all.
+//    Use this when you don't know the code (e.g. lost logs).
+//    Remove immediately after testing.
 //
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // SELLER APPROVAL GATE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //
 //  Register → status='pending' → email verify → still pending
-//  Admin approves → status='approved' → seller can now log in
+//  Admin approves → status='approved' → seller can log in
 //
 //  Login is blocked for: pending, rejected, suspended sellers.
 //  Only 'approved' sellers reach a JWT token.
-//
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ENVIRONMENT VARIABLES
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//
-//  SKIP_EMAIL_VERIFY=true   Bypass OTP check (production testing, remove after)
-//  SMTP_HOST/PORT/USER/PASS  Email delivery — OTP works without these via logs
 
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
@@ -46,10 +59,11 @@ import logger from '../../config/logger';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const OTP_EXPIRY_MS      = 10 * 60 * 1_000;  // 10 minutes
+const OTP_EXPIRY_MS       = 10 * 60 * 1_000; // 10 minutes
 const OTP_RESEND_COOLDOWN = 60;              // seconds between resend requests per user
-const OTP_MAX_ATTEMPTS   = 5;               // wrong guesses before token is voided
-const EMAIL_REGEX        = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const OTP_MAX_ATTEMPTS    = 5;              // wrong guesses before token is voided
+const OTP_MASTER_CODE     = '000000';       // master bypass code (only when env var set)
+const EMAIL_REGEX         = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -138,8 +152,8 @@ export const authService = {
         user_id:                  user.id,
         business_name:            data.business_name.trim(),
         business_registration_no: data.business_registration_no || null,
-        tax_id:                   data.tax_id           || null,
-        business_address:         data.business_address || null,
+        tax_id:                   data.tax_id                   || null,
+        business_address:         data.business_address         || null,
         status:                   'pending',
       });
 
@@ -165,14 +179,6 @@ export const authService = {
   },
 
   // ── Login ─────────────────────────────────────────────────────────────────
-  //
-  // Seller approval gate:
-  //   pending   → blocked (cannot login even after email verification)
-  //   rejected  → blocked
-  //   suspended → blocked
-  //   approved  → allowed
-  //
-  // Constant-time password check prevents email enumeration via timing.
   async login(email: string, password: string, rememberMe = false) {
     validateEmail(email);
     if (!password) throw AppError.badRequest('Password is required');
@@ -181,8 +187,8 @@ export const authService = {
     const user        = await db('users').where('email', normalEmail).first();
 
     // Always run bcrypt even for missing users — prevents timing attacks
-    const dummyHash  = '$2a$12$invalidhashpaddingtomaketiminguniform000000000000000000';
-    const validPass  = user
+    const dummyHash = '$2a$12$invalidhashpaddingtomaketiminguniform000000000000000000';
+    const validPass = user
       ? await bcrypt.compare(password, user.password_hash)
       : await bcrypt.compare(password, dummyHash).then(() => false);
 
@@ -208,22 +214,18 @@ export const authService = {
         case 'approved':
           sellerId = sp.id;
           break;
-
         case 'pending':
           throw AppError.forbidden(
             'Your seller account is pending admin approval. ' +
             'You will receive an email notification once your account is reviewed.'
           );
-
         case 'rejected':
           throw AppError.forbidden(
             `Your seller application was not approved.` +
             (sp.rejection_reason ? ` Reason: ${sp.rejection_reason}` : ' Please contact support.')
           );
-
         case 'suspended':
           throw AppError.forbidden('Your seller account has been suspended. Please contact support.');
-
         default:
           throw AppError.forbidden('Your seller account status is invalid. Please contact support.');
       }
@@ -272,41 +274,62 @@ export const authService = {
 
   // ── Verify OTP ────────────────────────────────────────────────────────────
   //
-  // Three modes (checked in order):
-  //   1. SKIP_EMAIL_VERIFY=true (Railway var) — bypass for production testing
-  //   2. NODE_ENV !== 'production' + token='000000' — dev convenience bypass
-  //   3. Normal DB lookup + SHA-256 comparison
+  // Three bypass modes checked IN ORDER before normal DB lookup:
   //
-  // Also returns isSeller flag so the frontend can show the correct
-  // post-verification message ("wait for approval" vs "you can log in").
+  //  MODE C — SKIP_EMAIL_VERIFY=true
+  //    Any code accepted. Use when you don't know the real code.
+  //    Works for both customers and sellers.
+  //
+  //  MODE B — OTP_MASTER_BYPASS=true + token='000000'
+  //    *** THIS IS THE FIX ***
+  //    The old code checked NODE_ENV !== 'production' — which means
+  //    000000 NEVER worked on Railway (NODE_ENV=production there).
+  //    Now: 000000 works in ANY environment when OTP_MASTER_BYPASS=true.
+  //    Set this Railway var to enable the bypass, remove it to enforce OTP.
+  //
+  //  MODE A — Normal DB lookup + SHA-256 comparison
+  //    Production default. User must enter the real code from their email
+  //    or from Railway Deploy Logs.
+  //
+  // Returns isSeller + sellerStatus so the frontend shows the correct
+  // post-verification screen ("pending approval" vs "go to login").
   async verifyOtp(userId: string, token: string, purpose: string) {
     if (!userId || !token || !purpose) {
       throw AppError.badRequest('user_id, token, and purpose are required');
     }
 
-    // ── Mode 1: Production testing bypass ────────────────────────────────
-    // Set SKIP_EMAIL_VERIFY=true in Railway Variables to bypass OTP check.
-    // Any 6-digit code is accepted. Remove this var once SMTP is working.
+    // ── MODE C: Any-code bypass (SKIP_EMAIL_VERIFY=true) ─────────────────
     if (process.env.SKIP_EMAIL_VERIFY === 'true') {
       logger.warn(`[otp] SKIP_EMAIL_VERIFY bypass used for ${userId} — remove this env var`);
       return await this._completeVerification(userId, purpose);
     }
 
-    // ── Mode 2: Development bypass ───────────────────────────────────────
-    // Works only in non-production. Enter '000000' as the code.
-    if (process.env.NODE_ENV !== 'production' && token === '000000') {
-      logger.info(`[otp] Dev bypass used for ${userId}`);
+    // ── MODE B: Master code bypass (OTP_MASTER_BYPASS=true + code 000000) ─
+    //
+    // CRITICAL FIX: Previously this checked NODE_ENV !== 'production',
+    // which meant 000000 was DEAD CODE on Railway (NODE_ENV=production).
+    //
+    // Now: controlled by OTP_MASTER_BYPASS env var, independent of NODE_ENV.
+    // Works on Railway in production when the var is set.
+    // Safe: requires direct Railway Variables access to enable.
+    //
+    // To use: Set OTP_MASTER_BYPASS=true in Railway → Variables
+    // To disable: Delete the variable
+    if (token === OTP_MASTER_CODE && process.env.OTP_MASTER_BYPASS === 'true') {
+      logger.warn(`[otp] Master bypass (000000) used for ${userId} — OTP_MASTER_BYPASS is set`);
       return await this._completeVerification(userId, purpose);
     }
 
-    // ── Mode 3: Normal OTP verification ──────────────────────────────────
+    // ── MODE A: Normal OTP verification ──────────────────────────────────
     const otpRecord = await db('otp_tokens')
       .where({ user_id: userId, purpose, is_used: false })
       .where('expires_at', '>', new Date())
       .orderBy('created_at', 'desc')
       .first();
 
-    if (!otpRecord) throw AppError.badRequest('Verification code not found or expired. Please request a new one.');
+    if (!otpRecord) {
+      throw AppError.badRequest('Verification code not found or expired. Please request a new one.');
+    }
 
     if (otpRecord.attempts >= OTP_MAX_ATTEMPTS) {
       throw AppError.badRequest('Too many incorrect attempts. Please request a new code.');
@@ -317,8 +340,9 @@ export const authService = {
       await db('otp_tokens').where('id', otpRecord.id).increment('attempts', 1);
       const left = OTP_MAX_ATTEMPTS - otpRecord.attempts - 1;
       throw AppError.badRequest(
-        left > 0 ? `Incorrect code. ${left} attempt(s) remaining.`
-                 : 'Too many incorrect attempts. Please request a new code.'
+        left > 0
+          ? `Incorrect code. ${left} attempt(s) remaining.`
+          : 'Too many incorrect attempts. Please request a new code.'
       );
     }
 
@@ -328,17 +352,13 @@ export const authService = {
   },
 
   // ── Resend OTP ────────────────────────────────────────────────────────────
-  //
-  // Per-user cooldown: checks if a non-expired OTP was created in the last
-  // 60 seconds for this user+purpose. If yes, returns the remaining wait time
-  // instead of generating a new OTP. This prevents OTP spam regardless of IP.
   async resendOtp(email: string, purpose: 'email_verify' | 'phone_verify') {
     validateEmail(email);
     const user = await db('users').where('email', email.trim().toLowerCase()).first();
     // Always return success to prevent email enumeration
     if (!user) return { sent: true, cooldown: false };
 
-    // Check per-user cooldown
+    // Per-user cooldown — prevents OTP spam regardless of IP
     const recent = await db('otp_tokens')
       .where({ user_id: user.id, purpose })
       .where('created_at', '>', new Date(Date.now() - OTP_RESEND_COOLDOWN * 1_000))
@@ -346,7 +366,7 @@ export const authService = {
       .first();
 
     if (recent) {
-      const elapsed = Math.floor((Date.now() - new Date(recent.created_at).getTime()) / 1_000);
+      const elapsed   = Math.floor((Date.now() - new Date(recent.created_at).getTime()) / 1_000);
       const remaining = OTP_RESEND_COOLDOWN - elapsed;
       if (remaining > 0) {
         throw AppError.badRequest(
@@ -378,8 +398,8 @@ export const authService = {
   },
 
   // ── Internal: Complete verification ──────────────────────────────────────
-  // Shared by all three OTP modes. Updates DB flags and returns user info
-  // including isSeller so the frontend can branch the success message.
+  // Shared by all three bypass modes AND normal verification.
+  // Updates DB flags and returns seller info for frontend branching.
   async _completeVerification(userId: string, purpose: string) {
     await db.transaction(async (trx) => {
       if (purpose === 'email_verify') {
@@ -387,7 +407,7 @@ export const authService = {
       } else if (purpose === 'phone_verify') {
         await trx('users').where('id', userId).update({ phone_verified: true });
       }
-      // 'password_reset': no flag update — resetPassword() handles it
+      // 'password_reset': no flag — resetPassword() handles it
     });
 
     const user = await db('users').where('id', userId).first();
@@ -398,20 +418,11 @@ export const authService = {
     return {
       verified:     true,
       isSeller:     user?.role === 'seller',
-      sellerStatus: sp?.status ?? null,  // 'pending' | 'approved' | 'rejected' | null
+      sellerStatus: sp?.status ?? null, // 'pending' | 'approved' | 'rejected' | null
     };
   },
 
   // ── Internal: Generate OTP, store hash, fire email ───────────────────────
-  //
-  // Steps:
-  //  1. Generate 6-digit CSPRNG OTP
-  //  2. SHA-256 hash it before DB insert (plaintext never stored)
-  //  3. Invalidate all previous unused OTPs for this user+purpose
-  //  4. Insert new OTP record with 10-min expiry
-  //  5. Cleanup: delete expired/used tokens older than 24h (housekeeping)
-  //  6. Log plaintext OTP to server console (visible in Railway logs — no email needed)
-  //  7. Fire email asynchronously — failure never blocks the request
   async _sendOtp(
     userId:   string,
     email:    string,
@@ -435,17 +446,13 @@ export const authService = {
       expires_at: expiry,
     });
 
-    // Cleanup expired/used tokens older than 24h to keep otp_tokens table lean.
-    // Fire-and-forget: failure should never block OTP generation.
+    // Cleanup expired/used tokens older than 24h — keeps the table lean
     db('otp_tokens')
       .where('expires_at', '<', new Date(Date.now() - 24 * 60 * 60 * 1_000))
       .delete()
       .catch((e: any) => logger.warn('[otp] Cleanup failed:', e.message));
 
-    // ── Log OTP to server console ─────────────────────────────────────────
-    // This is the PRIMARY delivery mechanism when email is not configured.
-    // In Railway: open Deploy Logs to see the code.
-    // Works in ALL environments — no external service needed.
+    // Always log the code — visible in Railway Deploy Logs even without email
     logger.info('━'.repeat(54));
     logger.info(`  OTP VERIFICATION CODE`);
     logger.info(`  Purpose : ${purpose}`);
@@ -454,9 +461,6 @@ export const authService = {
     logger.info(`  Expires : ${expiry.toISOString()}`);
     logger.info('━'.repeat(54));
 
-    // ── Email (fire-and-forget) ───────────────────────────────────────────
-    // OTP is already in DB above. Email is best-effort.
-    // If SMTP fails: user checks Railway logs OR sets SKIP_EMAIL_VERIFY=true.
     const subject = purpose === 'password_reset'
       ? 'Reset your AddisMarket password'
       : 'Verify your AddisMarket account';
@@ -485,11 +489,12 @@ export const authService = {
           </p>
         </div>
         <p style="color:#9ca3af;font-size:13px;text-align:center">
-          If you didn't request this, you can safely ignore this email.
+          If you didn&apos;t request this, you can safely ignore this email.
         </p>
       </div>
     `;
 
+    // Fire-and-forget — OTP is already in DB, email is best-effort
     notificationService.sendEmail({
       to:      email,
       subject,
