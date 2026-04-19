@@ -1,7 +1,4 @@
-// frontend/src/app/(public)/contact/page.tsx
-// Split into a server outer component (contact info + CMS) 
-// and a client inner component (contact form).
-
+ 
 import type { Metadata } from 'next';
 import { Mail, Phone, MapPin, Clock } from 'lucide-react';
 import { ContactForm } from './ContactForm';
