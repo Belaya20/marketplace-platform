@@ -55,7 +55,7 @@ const CONTACT_ITEMS = [
   {
     icon: MapPin,
     href: '#',
-    label: 'Bole, Addis Ababa',
+    label: 'Bethel, Addis Ababa',
   },
 ];
 
@@ -133,11 +133,7 @@ function Section({
   );
 }
 
-/* ──────────────────────────────────────────────────────────────
-   FOOTER LINK
-   - Removed yellow dot
-   - Old hover effect restored
-────────────────────────────────────────────────────────────── */
+ 
 function FLink({
   href,
   children,
@@ -237,11 +233,8 @@ export default function Footer() {
 
               <div className="w-full max-w-md rounded-3xl border border-white/[0.08] bg-white/[0.03] backdrop-blur-md p-5 sm:p-0 sm:bg-transparent sm:border-0 sm:rounded-none sm:backdrop-blur-none">
                 <p className="text-sm leading-7 text-slate-300 sm:max-w-[300px]">
-                  Ethiopia&apos;s premier multi-vendor marketplace —
-                  connecting buyers with thousands of verified sellers
-                  across the country.
+                 Connecting buyers and verified sellers across Ethiopia.
                 </p>
-
                 {/* CONTACT */}
                 <div className="mt-5 grid gap-3 sm:space-y-2.5 sm:block">
                   {CONTACT_ITEMS.map((item) => (
